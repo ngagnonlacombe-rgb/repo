@@ -12,7 +12,9 @@ export const REGLES_DEFAUT = {
   dinerMinutes: 30, // dîner non payé retiré chaque jour travaillé…
   dinerSeuil: 5, // …quand l'employé a travaillé au moins ce nombre d'heures dans la journée
 };
-const TYPES = ['banque', 'vacances', 'maladie'];
+// Mêmes catégories qu'Agendrix. Banque, vacances et maladie se calculent avec les heures travaillées ;
+// les autres ne bougent qu'avec ce que le bureau inscrit.
+const TYPES = ['banque', 'absence', 'conge_perso', 'ferie', 'maladie', 'maladie_np', 'vacances'];
 const FUSEAU = 'America/Toronto';
 
 const enDate = (t) => new Date(`${t.replace(' ', 'T')}Z`);
@@ -77,6 +79,10 @@ export function soldes(db, employeId, maintenant = new Date()) {
     vacances: arrondi(total * taux / 100 + mouvements('vacances')),
     // La maladie repart à neuf chaque 1er janvier.
     maladie: arrondi(r.maladieAnnuelle + mouvements('maladie', `${annee}-01-01`)),
+    absence: arrondi(mouvements('absence')),
+    conge_perso: arrondi(mouvements('conge_perso')),
+    ferie: arrondi(mouvements('ferie')),
+    maladie_np: arrondi(mouvements('maladie_np')),
     tauxVacances: taux,
   };
 }
@@ -117,7 +123,7 @@ export function brancherBanques(app, { db }) {
     const b = req.body || {};
     const e = employe(Number(b.employe_id));
     if (!e) return res.status(404).json({ erreur: 'Employé introuvable.' });
-    if (!TYPES.includes(b.type)) return res.status(400).json({ erreur: 'Choisis banque, vacances ou maladie.' });
+    if (!TYPES.includes(b.type)) return res.status(400).json({ erreur: 'Choisis une banque.' });
     const heures = Number(b.heures);
     if (!Number.isFinite(heures) || heures === 0 || Math.abs(heures) > 2000) return res.status(400).json({ erreur: 'Nombre d\'heures invalide.' });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(b.date))) return res.status(400).json({ erreur: 'Date invalide.' });
