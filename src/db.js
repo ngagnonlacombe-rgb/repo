@@ -143,6 +143,14 @@ export function ouvrirBase(fichier) {
     );
     CREATE INDEX IF NOT EXISTS heures_mouvements_employe ON heures_mouvements (employe_id, date);
 
+    -- Jours où le dîner (normalement non payé) est payé parce que l'employé n'a pas dîné.
+    CREATE TABLE IF NOT EXISTS diners_payes (
+      employe_id INTEGER NOT NULL REFERENCES utilisateurs(id) ON DELETE CASCADE,
+      jour TEXT NOT NULL,
+      par INTEGER REFERENCES utilisateurs(id),
+      PRIMARY KEY (employe_id, jour)
+    );
+
     CREATE TABLE IF NOT EXISTS reglages (
       cle TEXT PRIMARY KEY,
       valeur TEXT NOT NULL

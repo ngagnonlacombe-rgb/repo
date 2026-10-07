@@ -55,13 +55,14 @@ test('semaines à l\'heure du Québec et soldes calculés', async () => {
   ajout.run(idMarc, '2026-09-25 12:00:00', '2026-09-25 22:00:00'); // 10 h
   ajout.run(idMarc, '2026-09-28 02:00:00', '2026-09-28 06:00:00'); // 4 h, dimanche soir au Québec
 
-  assert.deepEqual(semaines(db, idMarc).map((s) => [s.lundi, s.heures]), [['2026-09-28', 45], ['2026-09-21', 38]]);
-  // Banque : 5 h au-delà de 40 h × 1,5 ; vacances : 4 % de 83 h ; maladie : 16 h par année.
-  assert.deepEqual(soldes(db, idMarc), { banque: 7.5, vacances: 3.32, maladie: 16, tauxVacances: 4 });
+  // 30 min de dîner retirées par journée de 5 h et plus : 45 − 2,5 = 42,5 ; 38 − 1,5 = 36,5 (le quart de 4 h du dimanche n'en a pas).
+  assert.deepEqual(semaines(db, idMarc).map((s) => [s.lundi, s.heures]), [['2026-09-28', 42.5], ['2026-09-21', 36.5]]);
+  // Banque : 2,5 h au-delà de 40 h × 1,5 ; vacances : 4 % de 79 h payées ; maladie : 16 h par année.
+  assert.deepEqual(soldes(db, idMarc), { banque: 3.75, vacances: 3.16, maladie: 16, tauxVacances: 4 });
 
   const r = (await marc('/api/mes-heures')).corps;
-  assert.deepEqual(r.semaines.map((s) => [s.lundi, s.heures, s.banque]), [['2026-09-28', 45, 7.5], ['2026-09-21', 38, 0]]);
-  assert.equal(r.soldes.banque, 7.5);
+  assert.deepEqual(r.semaines.map((s) => [s.lundi, s.heures, s.banque]), [['2026-09-28', 42.5, 3.75], ['2026-09-21', 36.5, 0]]);
+  assert.equal(r.soldes.banque, 3.75);
 });
 
 test('le bureau inscrit les congés pris et les soldes de départ ; règles et taux modifiables', async () => {
@@ -76,14 +77,14 @@ test('le bureau inscrit les congés pris et les soldes de départ ; règles et t
   assert.equal((await inscrire({ type: 'banque', heures: -3.5, date: `${annee}-10-02` })).status, 201);
   assert.equal((await inscrire({ type: 'maladie', heures: -8, date: `${annee}-02-10` })).status, 201);
   const ancienne = await inscrire({ type: 'maladie', heures: -8, date: `${annee - 1}-12-10` }); // l'an passé : ne compte plus
-  assert.deepEqual(ancienne.corps.soldes, { banque: 4, vacances: 27.32, maladie: 8, tauxVacances: 4 });
+  assert.deepEqual(ancienne.corps.soldes, { banque: 0.25, vacances: 27.16, maladie: 8, tauxVacances: 4 });
 
   // Taux de vacances de 6 % pour Marc, puis règles changées pour tous.
-  assert.equal((await bureau(`/api/bureau/soldes/${idMarc}`, { method: 'PATCH', json: { taux_vacances: 6 } })).corps.soldes.vacances, 28.98);
+  assert.equal((await bureau(`/api/bureau/soldes/${idMarc}`, { method: 'PATCH', json: { taux_vacances: 6 } })).corps.soldes.vacances, 28.74);
   assert.equal((await bureau('/api/bureau/regles-heures', { method: 'PUT', json: { semaine: 44, multiplicateurBanque: 1, tauxVacances: 4, maladieAnnuelle: 16 } })).status, 200);
   assert.equal((await bureau('/api/bureau/regles-heures', { method: 'PUT', json: { semaine: 0 } })).status, 400);
   const { employes } = (await bureau('/api/bureau/soldes')).corps;
-  assert.deepEqual(employes[0].soldes, { banque: -2.5, vacances: 28.98, maladie: 8, tauxVacances: 6 });
+  assert.deepEqual(employes[0].soldes, { banque: -3.5, vacances: 28.74, maladie: 8, tauxVacances: 6 });
 
   // L'employé voit ses soldes et ses congés pris ; le bureau peut annuler une inscription.
   const vu = (await marc('/api/mes-heures')).corps;
@@ -92,5 +93,35 @@ test('le bureau inscrit les congés pris et les soldes de départ ; règles et t
   const { mouvements } = (await bureau(`/api/bureau/mouvements/${idMarc}`)).corps;
   assert.equal(mouvements.length, 5);
   assert.equal((await bureau(`/api/bureau/mouvements/${mouvements[0].id}`, { method: 'DELETE' })).status, 204);
-  assert.equal((await marc('/api/mes-heures')).corps.soldes.banque, 1);
+  assert.equal((await marc('/api/mes-heures')).corps.soldes.banque, 0);
+});
+
+test('dîner : 30 min retirées par jour, payées en un clic quand l\'employé n\'a pas dîné', async () => {
+  const diner = (jour, paye) => bureau('/api/bureau/diners', { method: 'POST', json: { employe_id: idMarc, jour, paye } });
+  assert.equal((await marc('/api/bureau/diners', { method: 'POST', json: {} })).status, 403);
+  assert.equal((await diner('hier', true)).status, 400);
+  const r = await diner('2026-09-29', true);
+  assert.equal(r.status, 200);
+  assert.deepEqual([r.corps.jour.travaillees, r.corps.jour.diner, r.corps.jour.dinerPaye, r.corps.jour.payees], [9, 0, true, 9]);
+  assert.equal((await diner('2026-09-29', true)).status, 200); // deuxième clic identique : sans effet
+  assert.equal(semaines(db, idMarc)[0].heures, 43);
+
+  // Le bureau voit la journée avec son dîner dans l'onglet Heures.
+  const periode = `du=${encodeURIComponent('2026-09-28T04:00:00Z')}&au=${encodeURIComponent('2026-10-05T04:00:00Z')}`;
+  const { jours } = (await bureau(`/api/bureau/heures?${periode}`)).corps;
+  assert.deepEqual(jours.map((j) => [j.jour, j.payees, j.dinerPaye]).sort(), [
+    ['2026-09-28', 8.5, false], ['2026-09-29', 9, true], ['2026-09-30', 8.5, false], ['2026-10-01', 8.5, false], ['2026-10-02', 8.5, false]]);
+  const csv = await (await fetch(`${base}/api/bureau/heures.csv?${periode}`, { headers: { cookie: await (async () => {
+    const c = await fetch(`${base}/api/connexion`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identifiant: 'nicolas', motDePasse: 'un-bon-mot-de-passe' }) });
+    return c.headers.get('set-cookie').split(';')[0];
+  })() } })).text();
+  assert.match(csv, /"Marc";"2026-09-29";"08:00";"17:00";"9,00";"payé";"9,00";""/);
+  assert.match(csv, /"Marc";"2026-09-30";"08:00";"17:00";"9,00";"0,50";"8,50";""/);
+  assert.match(csv, /"Total Marc";"";"";"";"";"";"43,00";""/);
+
+  await diner('2026-09-29', false);
+  assert.equal(semaines(db, idMarc)[0].heures, 42.5);
+  // Règle du dîner modifiable : sans dîner retiré, la semaine compte 45 h.
+  await bureau('/api/bureau/regles-heures', { method: 'PUT', json: { semaine: 40, multiplicateurBanque: 1.5, tauxVacances: 4, maladieAnnuelle: 16, dinerMinutes: 0, dinerSeuil: 5 } });
+  assert.equal(semaines(db, idMarc)[0].heures, 45);
 });
