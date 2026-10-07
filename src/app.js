@@ -160,7 +160,9 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
   app.get('/api/bureau/factures', exigerConnexion, exigerBureau, (req, res) => {
     const statut = ['en_attente', 'approuvee', 'refusee'].includes(req.query.statut) ? req.query.statut : 'en_attente';
     const ordre = statut === 'en_attente' ? 'f.maj_le ASC' : 'f.maj_le DESC';
-    res.json({ factures: db.prepare(`${avecEmploye} WHERE f.statut = ? ORDER BY ${ordre} LIMIT 200`).all(statut) });
+    const factures = db.prepare(`${avecEmploye} WHERE f.statut = ? ORDER BY ${ordre} LIMIT 200`).all(statut);
+    // Factures envoyées avant le calcul automatique : on complète aussi l'affichage pour le bureau.
+    res.json({ factures: factures.map((f) => ({ ...f, ...completerTaxes(f) })) });
   });
 
   app.get('/api/bureau/listes', exigerConnexion, exigerBureau, async (_req, res, next) => {

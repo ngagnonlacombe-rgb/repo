@@ -9,7 +9,7 @@ import { creerApp } from '../src/app.js';
 import { creerQuickBooksDemo } from '../src/quickbooks.js';
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
-let serveur, base, dossier, qbo, lectures;
+let serveur, base, dossier, qbo, lectures, db;
 
 before(async () => {
   dossier = fs.mkdtempSync(path.join(os.tmpdir(), 'app-employes-'));
@@ -23,7 +23,8 @@ before(async () => {
         sous_total: 100, tps: 5, tvq: 9.98, total: 114.98 };
     },
   };
-  const app = creerApp({ db: ouvrirBase(':memory:'), qbo, lecteur, dossierFichiers: path.join(dossier, 'f') });
+  db = ouvrirBase(':memory:');
+  const app = creerApp({ db, qbo, lecteur, dossierFichiers: path.join(dossier, 'f') });
   await new Promise((ok) => { serveur = app.listen(0, ok); });
   base = `http://127.0.0.1:${serveur.address().port}`;
 });
@@ -202,4 +203,14 @@ test("reçu d'essence : avec seulement le total, l'app calcule les taxes", async
   const r = await employe(`/api/factures/${id}`, { method: 'PUT', json: { fournisseur: 'Ultramar', total: '80,00', soumettre: true } });
   assert.equal(r.status, 200);
   assert.deepEqual([r.corps.facture.sous_total, r.corps.facture.tps, r.corps.facture.tvq], [69.58, 3.48, 6.94]);
+});
+
+test('une facture envoyée avant le calcul automatique arrive au bureau avec les taxes calculées', async () => {
+  const form = new FormData();
+  form.append('fichier', new Blob([PNG], { type: 'image/png' }), 'ancien.png');
+  const id = (await employe('/api/factures', { method: 'POST', body: form })).corps.facture.id;
+  await employe(`/api/factures/${id}`, { method: 'PUT', json: { fournisseur: 'Esso', total: '114.98', soumettre: true } });
+  db.prepare('UPDATE factures SET sous_total = NULL, tps = NULL, tvq = NULL WHERE id = ?').run(id);
+  const f = (await bureau('/api/bureau/factures')).corps.factures.find((x) => x.id === id);
+  assert.deepEqual([f.sous_total, f.tps, f.tvq], [100, 5, 9.98]);
 });
