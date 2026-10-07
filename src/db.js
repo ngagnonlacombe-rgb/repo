@@ -95,6 +95,19 @@ export function ouvrirBase(fichier) {
       cree_le TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    -- Messagerie privée : une conversation par employé avec le bureau (tous les comptes bureau la voient).
+    CREATE TABLE IF NOT EXISTS messages_bureau (
+      id INTEGER PRIMARY KEY,
+      employe_id INTEGER NOT NULL REFERENCES utilisateurs(id) ON DELETE CASCADE,
+      auteur_id INTEGER NOT NULL REFERENCES utilisateurs(id),
+      texte TEXT,
+      fichier TEXT,
+      type_mime TEXT,
+      lu INTEGER NOT NULL DEFAULT 0,
+      cree_le TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS messages_bureau_employe ON messages_bureau (employe_id, id);
+
     CREATE TABLE IF NOT EXISTS reglages (
       cle TEXT PRIMARY KEY,
       valeur TEXT NOT NULL

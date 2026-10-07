@@ -10,6 +10,7 @@ import {
 import { lireReglage, ecrireReglage } from './db.js';
 import { ErreurQbo } from './quickbooks.js';
 import { brancherProjets } from './projets.js';
+import { brancherMessagerie } from './messagerie.js';
 
 const TYPES_ACCEPTES = {
   'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'application/pdf': 'pdf',
@@ -335,6 +336,7 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
   });
 
   brancherProjets(app, { db, dossierFichiers });
+  brancherMessagerie(app, { db, dossierFichiers });
 
   app.use('/api', (_req, res) => res.status(404).json({ erreur: 'Adresse inconnue.' }));
 

@@ -114,3 +114,6 @@ a.bouton.secondaire { background: transparent; color: var(--accent-lien); }
 }
 .titre-album button.lien { color: var(--accent-lien); }
 .titre-album #btn-supprimer-album { color: var(--danger); }
+.compteur { display: inline-block; min-width: 20px; padding: 1px 6px; margin-left: 4px; border-radius: 10px;
+  background: var(--danger); color: #fff; font-size: 12px; font-weight: 700; text-align: center; line-height: 18px; }
+.compteur[hidden] { display: none; }
