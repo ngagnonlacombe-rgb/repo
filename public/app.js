@@ -604,6 +604,8 @@ async function ongletDossier(contenu, p, dossier, moi) {
     <button class="pleine ${photos ? '' : 'secondaire'}" type="button" id="btn-deposer">${photos ? 'Ajouter des photos' : 'Ajouter des fichiers'}</button>
     <p class="doux" style="text-align:center">${photos ? 'Les photos envoyées dans la discussion apparaissent aussi ici.'
       : 'PDF, Word, Excel, texte ou image, 25 Mo maximum par fichier.'}</p>` : ''}
+    ${!photos && moi.role !== 'bureau' && !moi.chef_projet ? `<p class="doux" style="text-align:center">
+      Tu vois seulement tes documents. Les chargés de projet et le bureau voient tous les documents du projet.</p>` : ''}
     <div id="liste-dossier"><p class="vide">Chargement…</p></div>`;
 
   const afficher = async () => {

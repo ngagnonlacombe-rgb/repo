@@ -58,6 +58,8 @@ export function brancherProjets(app, { db, dossierFichiers }) {
                              u.nom AS auteur FROM projet_messages m JOIN utilisateurs u ON u.id = m.auteur_id`;
   // Les employés voient les projets actifs ; un projet archivé reste consultable par le bureau.
   const visible = (p, u) => p && (p.actif || u.role === 'bureau');
+  // Tout le monde dépose des documents ; un employé ne voit que les siens, le bureau et les chargés de projet voient tout.
+  const voitTousDocuments = (u) => u.role === 'bureau' || Boolean(u.chef_projet);
 
   app.get('/api/projets', exigerConnexion, (req, res) => {
     const archives = req.query.archives === '1' && req.utilisateur.role === 'bureau';
@@ -66,8 +68,10 @@ export function brancherProjets(app, { db, dossierFichiers }) {
              (SELECT COUNT(*) FROM projet_messages m WHERE m.projet_id = p.id) AS nb_messages,
              (SELECT COUNT(*) FROM projet_messages m WHERE m.projet_id = p.id AND m.fichier IS NOT NULL)
                + (SELECT COUNT(*) FROM projet_fichiers f WHERE f.projet_id = p.id AND f.dossier = 'photos') AS nb_photos,
-             (SELECT COUNT(*) FROM projet_fichiers f WHERE f.projet_id = p.id AND f.dossier = 'documents') AS nb_documents
-      FROM projets p WHERE p.actif = ? ORDER BY p.maj_le DESC LIMIT 200`).all(archives ? 0 : 1);
+             (SELECT COUNT(*) FROM projet_fichiers f WHERE f.projet_id = p.id AND f.dossier = 'documents'
+                AND (? OR f.auteur_id = ?)) AS nb_documents
+      FROM projets p WHERE p.actif = ? ORDER BY p.maj_le DESC LIMIT 200`)
+      .all(voitTousDocuments(req.utilisateur) ? 1 : 0, req.utilisateur.id, archives ? 0 : 1);
     res.json({ projets });
   });
 
@@ -154,17 +158,18 @@ export function brancherProjets(app, { db, dossierFichiers }) {
     const album = nomDossier === 'photos' && req.query.album != null ? Number(req.query.album) || 0 : null;
     const filtre = (t) => (album == null ? '' : album ? `AND ${t}.album_id = ?` : `AND ${t}.album_id IS NULL`);
     const valeurs = album ? [album] : [];
+    const seulementLesMiens = nomDossier === 'documents' && !voitTousDocuments(req.utilisateur);
     const fichiers = db.prepare(`
       SELECT f.id, f.nom_original, f.type_mime, f.taille, f.cree_le AS cree_le, f.auteur_id, u.nom AS auteur,
              '/api/projets/' || f.projet_id || '/fichiers/' || f.id AS url, 'dossier' AS source, f.album_id AS album_id
       FROM projet_fichiers f JOIN utilisateurs u ON u.id = f.auteur_id
-      WHERE f.projet_id = ? AND f.dossier = ? ${filtre('f')}
+      WHERE f.projet_id = ? AND f.dossier = ? ${filtre('f')} ${seulementLesMiens ? 'AND f.auteur_id = ?' : ''}
       ${nomDossier === 'photos' ? `UNION ALL
       SELECT m.id, NULL, m.type_mime, NULL, m.cree_le, m.auteur_id, u.nom,
              '/api/projets/' || m.projet_id || '/messages/' || m.id || '/photo', 'discussion', m.album_id
       FROM projet_messages m JOIN utilisateurs u ON u.id = m.auteur_id
       WHERE m.projet_id = ? AND m.fichier IS NOT NULL ${filtre('m')}` : ''}
-      ORDER BY cree_le DESC LIMIT 500`).all(...(nomDossier === 'photos' ? [p.id, nomDossier, ...valeurs, p.id, ...valeurs] : [p.id, nomDossier]));
+      ORDER BY cree_le DESC LIMIT 500`).all(...(nomDossier === 'photos' ? [p.id, nomDossier, ...valeurs, p.id, ...valeurs] : [p.id, nomDossier, ...(seulementLesMiens ? [req.utilisateur.id] : [])]));
     res.json({ fichiers });
   });
 
@@ -294,7 +299,8 @@ export function brancherProjets(app, { db, dossierFichiers }) {
   app.get('/api/projets/:id/fichiers/:fid', exigerConnexion, (req, res) => {
     const p = projet(Number(req.params.id));
     const f = db.prepare('SELECT * FROM projet_fichiers WHERE id = ? AND projet_id = ?').get(Number(req.params.fid), p?.id);
-    if (!visible(p, req.utilisateur) || !f) return res.status(404).json({ erreur: 'Fichier introuvable.' });
+    const cache = f?.dossier === 'documents' && f.auteur_id !== req.utilisateur.id && !voitTousDocuments(req.utilisateur);
+    if (!visible(p, req.utilisateur) || !f || cache) return res.status(404).json({ erreur: 'Fichier introuvable.' });
     res.type(f.type_mime).set('Cache-Control', 'private, max-age=86400');
     // Les images et les PDF s'ouvrent dans le navigateur ; le reste se télécharge avec son nom d'origine.
     if (!/^image\/|^application\/pdf$/.test(f.type_mime)) res.attachment(f.nom_original || f.fichier);
