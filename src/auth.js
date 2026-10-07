@@ -48,7 +48,7 @@ export function chargerUtilisateur(db) {
     req.jeton = jeton;
     if (jeton) {
       req.utilisateur = db.prepare(`
-        SELECT u.id, u.nom, u.identifiant, u.role FROM sessions s
+        SELECT u.id, u.nom, u.identifiant, u.role, u.chef_projet FROM sessions s
         JOIN utilisateurs u ON u.id = s.utilisateur_id
         WHERE s.jeton = ? AND s.expire_le > datetime('now') AND u.actif = 1`).get(jeton) || null;
     }

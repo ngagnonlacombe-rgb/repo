@@ -475,6 +475,7 @@ const heure = (d) => new Date(`${d.replace(' ', 'T')}Z`).toLocaleString('fr-CA',
 
 async function vueProjets(archives) {
   const bureau = etat.utilisateur.role === 'bureau';
+  const peutCreer = bureau || Boolean(etat.utilisateur.chef_projet);
   vue.innerHTML = `${ongletsBureau('projets')}<div id="contenu"><p class="vide">Chargement…</p></div>`;
   const { projets } = await api(`/api/projets${archives ? '?archives=1' : ''}`);
   const contenu = document.getElementById('contenu');
@@ -487,7 +488,7 @@ async function vueProjets(archives) {
           <div class="doux">${p.adresse ? `${h(p.adresse)} · ` : ''}${p.nb_messages} message(s) · ${p.nb_photos} photo(s) · ${p.nb_documents} document(s)</div></div>
         <a class="bouton secondaire" href="#projet/${p.id}">Ouvrir</a>
       </li>`).join('') : `<li class="vide">${archives ? 'Aucun projet archivé.' : 'Aucun projet en cours.'}</li>`}</ul></div>
-    ${bureau && !archives ? `
+    ${peutCreer && !archives ? `
     <h2>Nouveau projet</h2>
     <form class="carte" id="f-projet">
       <div class="grille2">
@@ -496,7 +497,7 @@ async function vueProjets(archives) {
       </div>
       <div class="actions"><button>Créer le projet</button></div>
     </form>
-    <p><a href="#projets/archives">Voir les projets archivés</a></p>` : ''}`;
+    ${bureau ? '<p><a href="#projets/archives">Voir les projets archivés</a></p>' : ''}` : ''}`;
 
   const form = document.getElementById('f-projet');
   form?.addEventListener('submit', (e) => {
@@ -1414,9 +1415,11 @@ async function vueEmployes() {
   const { utilisateurs } = await api('/api/bureau/utilisateurs');
   vue.innerHTML = `${ongletsBureau('employes')}
     <div class="carte"><ul class="liste">${utilisateurs.map((u) => `
-      <li>
+      <li class="employe">
         <div class="infos"><strong>${h(u.nom)}</strong>
-          <div class="doux">${h(u.identifiant)} · ${u.role === 'bureau' ? 'Bureau' : 'Employé'}${u.actif ? '' : ' · désactivé'}</div></div>
+          <div class="doux">${h(u.identifiant)} · ${u.role === 'bureau' ? 'Bureau' : u.chef_projet ? 'Chargé de projet' : 'Employé'}${u.actif ? '' : ' · désactivé'}</div></div>
+        ${u.role === 'bureau' ? '' : `<button class="secondaire" data-chef="${u.id}" data-valeur="${u.chef_projet ? 0 : 1}" type="button">
+          ${u.chef_projet ? 'Retirer chargé de projet' : 'Nommer chargé de projet'}</button>`}
         <button class="secondaire" data-mdp="${u.id}" type="button">Nouveau NIP</button>
         ${u.id === etat.utilisateur.id ? '' : `<button class="${u.actif ? 'danger' : 'secondaire'}" data-actif="${u.id}" data-valeur="${u.actif ? 0 : 1}" type="button">${u.actif ? 'Désactiver' : 'Réactiver'}</button>`}
       </li>`).join('')}</ul></div>
@@ -1442,6 +1445,10 @@ async function vueEmployes() {
   });
   vue.querySelectorAll('[data-actif]').forEach((b) => b.addEventListener('click', () => occuper(b, async () => {
     await api(`/api/bureau/utilisateurs/${b.dataset.actif}`, { method: 'PATCH', json: { actif: b.dataset.valeur === '1' } });
+    vueEmployes();
+  })));
+  vue.querySelectorAll('[data-chef]').forEach((b) => b.addEventListener('click', () => occuper(b, async () => {
+    await api(`/api/bureau/utilisateurs/${b.dataset.chef}`, { method: 'PATCH', json: { chef_projet: b.dataset.valeur === '1' } });
     vueEmployes();
   })));
   vue.querySelectorAll('[data-mdp]').forEach((b) => b.addEventListener('click', () => {
