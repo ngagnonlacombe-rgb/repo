@@ -108,6 +108,15 @@ export function ouvrirBase(fichier) {
     );
     CREATE INDEX IF NOT EXISTS messages_bureau_employe ON messages_bureau (employe_id, id);
 
+    CREATE TABLE IF NOT EXISTS push_abonnements (
+      id INTEGER PRIMARY KEY,
+      utilisateur_id INTEGER NOT NULL REFERENCES utilisateurs(id) ON DELETE CASCADE,
+      endpoint TEXT NOT NULL UNIQUE,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      cree_le TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS reglages (
       cle TEXT PRIMARY KEY,
       valeur TEXT NOT NULL

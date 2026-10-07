@@ -58,6 +58,7 @@ function pastille(statut) {
 // ---------- Routage ----------
 async function demarrer() {
   etat = await api('/api/etat');
+  navigator.serviceWorker?.register('/sw.js').catch(() => {});
   window.addEventListener('hashchange', route);
   route();
 }
@@ -87,6 +88,7 @@ function route() {
 }
 
 document.getElementById('btn-deconnexion').addEventListener('click', async () => {
+  await desabonnerNotifications();
   await api('/api/deconnexion', { method: 'POST' }).catch(() => {});
   etat.utilisateur = null;
   location.hash = '';
@@ -972,6 +974,7 @@ async function vueConversations() {
   const apercu = (c) => (c.dernier_le ? `${c.dernier_photo && !c.dernier_texte ? '📷 Photo' : h(c.dernier_texte || '').slice(0, 80)} · ${heure(c.dernier_le)}`
     : 'Aucun message');
   vue.innerHTML = `${ongletsBureau('messages')}
+    <div id="carte-notifications"></div>
     <p class="doux">Chaque employé a sa conversation privée avec le bureau.</p>
     <div class="carte"><ul class="liste">${conversations.map((c) => `
       <li>
@@ -980,6 +983,7 @@ async function vueConversations() {
           <div class="doux">${apercu(c)}</div></div>
         <a class="bouton secondaire" href="#messages/${c.id}">Ouvrir</a>
       </li>`).join('') || '<li class="vide">Aucun employé pour l\'instant.</li>'}</ul></div>`;
+  carteNotifications(document.getElementById('carte-notifications'));
 }
 
 function bulleMessagerie(m) {
@@ -995,6 +999,61 @@ function bulleMessagerie(m) {
     </li>`;
 }
 
+// ---------- Notifications sur le téléphone ----------
+// iPhone : les notifications ne marchent que si l'app est ajoutée à l'écran d'accueil et ouverte depuis son icône.
+const notificationsPossibles = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const iphoneHorsEcranAccueil = () => /iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone;
+
+async function abonnementActuel() {
+  if (!notificationsPossibles() || Notification.permission !== 'granted') return null;
+  const enregistrement = await navigator.serviceWorker.ready;
+  return enregistrement.pushManager.getSubscription();
+}
+
+async function activerNotifications() {
+  if (await Notification.requestPermission() !== 'granted') {
+    throw new Error('Les notifications sont bloquées. Autorise-les dans les réglages du téléphone pour cette app.');
+  }
+  const { cle } = await api('/api/notifications/cle');
+  const enregistrement = await navigator.serviceWorker.ready;
+  const abonnement = await enregistrement.pushManager.getSubscription()
+    || await enregistrement.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: Uint8Array.from(atob(cle.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0)) });
+  await api('/api/notifications/abonnement', { method: 'POST', json: abonnement.toJSON() });
+}
+
+async function desabonnerNotifications() {
+  try {
+    const abonnement = await abonnementActuel();
+    if (!abonnement) return;
+    await api('/api/notifications/abonnement', { method: 'DELETE', json: { endpoint: abonnement.endpoint } });
+    await abonnement.unsubscribe();
+  } catch { /* hors ligne : le serveur oubliera l'appareil au prochain envoi refusé */ }
+}
+
+// Carte affichée en haut des messages tant que ce téléphone ne reçoit pas les notifications.
+async function carteNotifications(conteneur) {
+  if (iphoneHorsEcranAccueil()) {
+    conteneur.innerHTML = `<div class="carte doux">Pour recevoir une notification à chaque message sur iPhone :
+      touche Partager, puis « Sur l'écran d'accueil », et ouvre Vapro GUS depuis son icône.</div>`;
+    return;
+  }
+  if (!notificationsPossibles()) return;
+  const abonnement = await abonnementActuel().catch(() => null);
+  if (abonnement) {
+    // Rattache l'appareil au compte connecté (utile si quelqu'un d'autre s'est connecté avant sur ce téléphone).
+    api('/api/notifications/abonnement', { method: 'POST', json: abonnement.toJSON() }).catch(() => {});
+    return;
+  }
+  conteneur.innerHTML = `<div class="carte"><p style="margin-top:0">Reçois une notification sur ce téléphone quand un message arrive.</p>
+    <button type="button" id="btn-notifications">Activer les notifications</button></div>`;
+  const bouton = document.getElementById('btn-notifications');
+  bouton.addEventListener('click', () => occuper(bouton, async () => {
+    await activerNotifications();
+    conteneur.innerHTML = '';
+    avis('Notifications activées sur ce téléphone.');
+  }));
+}
+
 // Employé : sa conversation avec le bureau. Bureau : la conversation d'un employé (employeId).
 async function vueMessagerie(employeId) {
   const ancre = location.hash;
@@ -1002,6 +1061,7 @@ async function vueMessagerie(employeId) {
   const { messages, employe } = await api(chemin);
   let dernier = messages.at(-1)?.id || 0;
   vue.innerHTML = `${ongletsBureau('messages')}
+    <div id="carte-notifications"></div>
     ${employe ? `<p><a href="#messages">← Toutes les conversations</a></p><h1>${h(employe.nom)}</h1>`
       : '<h1>Messages au bureau</h1><p class="doux">Seul le bureau voit cette conversation.</p>'}
     <div class="carte"><ul class="liste fil" id="fil">${messages.map(bulleMessagerie).join('')
@@ -1016,6 +1076,7 @@ async function vueMessagerie(employeId) {
       </div>
     </form>`;
   majNonLus();
+  carteNotifications(document.getElementById('carte-notifications'));
 
   const fil = document.getElementById('fil');
   fil.lastElementChild?.scrollIntoView({ block: 'nearest' });

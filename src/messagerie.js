@@ -7,7 +7,7 @@ import { exigerConnexion, exigerBureau } from './auth.js';
 
 const PHOTOS = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/heic': 'heic' };
 
-export function brancherMessagerie(app, { db, dossierFichiers }) {
+export function brancherMessagerie(app, { db, dossierFichiers, notifieur }) {
   const dossier = path.join(dossierFichiers, 'messages');
   fs.mkdirSync(dossier, { recursive: true });
   const televersement = multer({
@@ -39,7 +39,16 @@ export function brancherMessagerie(app, { db, dossierFichiers }) {
     }
     const { lastInsertRowid } = db.prepare(`INSERT INTO messages_bureau (employe_id, auteur_id, texte, fichier, type_mime)
       VALUES (?, ?, ?, ?, ?)`).run(employeId, req.utilisateur.id, texte, fichier, req.file?.mimetype ?? null);
-    res.status(201).json({ message: db.prepare(`${avecAuteur} WHERE m.id = ?`).get(Number(lastInsertRowid)) });
+    const message = db.prepare(`${avecAuteur} WHERE m.id = ?`).get(Number(lastInsertRowid));
+    res.status(201).json({ message });
+
+    // Notification sur le téléphone : l'employé écrit à tout le bureau, le bureau répond à l'employé.
+    const corps = (texte || '📷 Photo').slice(0, 140);
+    const destinataires = req.utilisateur.role === 'bureau' ? [employeId]
+      : db.prepare("SELECT id FROM utilisateurs WHERE role = 'bureau' AND actif = 1").all().map((u) => u.id);
+    notifieur?.notifier(destinataires, req.utilisateur.role === 'bureau'
+      ? { titre: 'Message du bureau', corps, url: '/#messages' }
+      : { titre: `Message de ${req.utilisateur.nom}`, corps, url: `/#messages/${employeId}` }).catch(() => {});
   };
 
   // Pastille du menu : messages reçus et pas encore lus.
