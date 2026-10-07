@@ -1195,6 +1195,18 @@ const NOMS_BANQUES = {
 const tuilesSoldes = (s) => `<div class="soldes">${Object.entries(NOMS_BANQUES).filter(([cle]) => cle in s).map(([cle, nom]) => `
   <div class="solde ${s[cle] < 0 ? 'negatif' : ''}"><span class="doux">${nom}</span><strong>${heuresDec(s[cle])}</strong></div>`).join('')}</div>`;
 
+// Position du téléphone au moment du punch. Un refus ou un GPS lent n'empêche jamais de puncher.
+const positionActuelle = () => new Promise((resoudre) => {
+  if (!navigator.geolocation) return resoudre(null);
+  navigator.geolocation.getCurrentPosition(
+    (p) => resoudre({ lat: p.coords.latitude, lng: p.coords.longitude, precision: p.coords.accuracy }),
+    () => resoudre(null), { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
+});
+
+// Lien vers la carte pour le bureau (« 📍 Début », « 📍 Fin »).
+const lienPosition = (nom, lat, lng, precision) => (lat == null ? `<span class="doux">${nom} : position non fournie</span>`
+  : `<a href="https://www.google.com/maps?q=${lat},${lng}" target="_blank" rel="noopener">📍 ${nom}</a>${precision ? ` <span class="doux">(± ${precision} m)</span>` : ''}`);
+
 async function vuePunch() {
   const ancre = location.hash || '#punch';
   const [{ enCours, recents }, mesHeures] = await Promise.all([api('/api/punch'), api('/api/mes-heures')]);
@@ -1208,6 +1220,7 @@ async function vuePunch() {
     </div>
     <input id="note-quart" placeholder="${enCours ? 'Note de fin de quart (facultatif)' : 'Chantier ou note (facultatif)'}" maxlength="500">
     <button class="geant ${enCours ? 'danger' : 'succes'}" type="button" id="btn-punch">${enCours ? 'Terminer mon quart' : 'Commencer mon quart'}</button>
+    <p class="doux">📍 Ta position est enregistrée seulement au moment où tu commences et termines ton quart, pas pendant.</p>
     <h2>Mes banques</h2>
     ${tuilesSoldes(mesHeures.soldes)}
     <h2>Cette semaine : ${heuresDec(mesHeures.semaines.find((sem) => sem.lundi === jourQc(debutSemaine.toISOString()))?.heures || 0)}</h2>
@@ -1234,7 +1247,8 @@ async function vuePunch() {
     if (enCours && !confirm('Terminer ton quart maintenant ?')) return;
     occuper(bouton, async () => {
       const note = document.getElementById('note-quart').value;
-      await api(enCours ? '/api/punch/fin' : '/api/punch/debut', { method: 'POST', json: { note } });
+      const position = await positionActuelle();
+      await api(enCours ? '/api/punch/fin' : '/api/punch/debut', { method: 'POST', json: { note, position } });
       avis(enCours ? 'Quart terminé. Bon retour !' : 'Quart commencé. Bonne journée !');
       route();
     });
@@ -1299,7 +1313,8 @@ async function vueHeures(semaineChoisie) {
             <ul class="liste">${siens.filter((p) => jourQc(p.debut) === j.jour).map((p) => `
               <li class="quart" data-id="${p.id}">
                 <div class="infos">${heureCourte(p.debut)} à ${p.fin ? heureCourte(p.fin) : 'en cours'}
-                  <div class="doux">${duree(dureeQuart(p, maintenant))}${p.note ? ` · ${h(p.note)}` : ''}${p.modifie_par ? ` · corrigé par ${h(p.modifie_par)}` : ''}</div></div>
+                  <div class="doux">${duree(dureeQuart(p, maintenant))}${p.note ? ` · ${h(p.note)}` : ''}${p.modifie_par ? ` · corrigé par ${h(p.modifie_par)}` : ''}</div>
+                  ${p.lat_debut != null || p.lat_fin != null ? `<div class="positions">${lienPosition('Début', p.lat_debut, p.lng_debut, p.precision_debut)}${p.fin ? ` · ${lienPosition('Fin', p.lat_fin, p.lng_fin, p.precision_fin)}` : ''}</div>` : ''}</div>
                 <button class="lien" type="button" data-corriger="${p.id}">Corriger</button>
               </li>`).join('')}</ul>
           </div>`).join('') || '<p class="vide">Aucun quart cette semaine.</p>'}

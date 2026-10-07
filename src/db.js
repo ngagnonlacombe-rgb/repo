@@ -183,6 +183,11 @@ export function ouvrirBase(fichier) {
       COMMIT;
     `);
   }
+  // Position GPS du téléphone au début et à la fin du quart (NULL si l'employé l'a refusée).
+  const colonnesPunch = db.prepare('PRAGMA table_info(punchs)').all().map((c) => c.name);
+  for (const c of ['lat_debut', 'lng_debut', 'precision_debut', 'lat_fin', 'lng_fin', 'precision_fin']) {
+    if (!colonnesPunch.includes(c)) db.exec(`ALTER TABLE punchs ADD COLUMN ${c} REAL`);
+  }
   // Chargé de projet : un employé qui peut créer des projets.
   if (!db.prepare('PRAGMA table_info(utilisateurs)').all().some((c) => c.name === 'chef_projet')) {
     db.exec('ALTER TABLE utilisateurs ADD COLUMN chef_projet INTEGER NOT NULL DEFAULT 0');

@@ -44,7 +44,7 @@ test('l\'employé commence et termine son quart ; pas deux quarts ouverts', asyn
 
   assert.equal((await marc('/api/punch')).corps.enCours, null);
   assert.equal((await marc('/api/punch/fin', { method: 'POST' })).status, 409);
-  const d = await marc('/api/punch/debut', { method: 'POST', json: { note: 'Chantier Tremblay' } });
+  const d = await marc('/api/punch/debut', { method: 'POST', json: { note: 'Chantier Tremblay', position: { lat: 46.8139, lng: -71.208, precision: 12.4 } } });
   assert.equal(d.status, 201);
   assert.equal((await marc('/api/punch/debut', { method: 'POST' })).status, 409);
   assert.equal((await marc('/api/punch')).corps.enCours.note, 'Chantier Tremblay');
@@ -54,10 +54,13 @@ test('l\'employé commence et termine son quart ; pas deux quarts ouverts', asyn
   assert.deepEqual(h.employes.map((e) => e.nom), ['Marc']);
   assert.equal(h.punchs.length, 1);
   assert.equal(h.punchs[0].fin, null);
+  assert.deepEqual([h.punchs[0].lat_debut, h.punchs[0].lng_debut, h.punchs[0].precision_debut], [46.8139, -71.208, 12]);
 
-  const f = await marc('/api/punch/fin', { method: 'POST', json: { note: 'Toiture finie' } });
+  const f = await marc('/api/punch/fin', { method: 'POST', json: { note: 'Toiture finie', position: { lat: 'abc', lng: 999 } } });
   assert.equal(f.status, 200);
   assert.equal(f.corps.punch.note, 'Chantier Tremblay · Fin : Toiture finie');
+  // Position refusée ou invalide à la fin : le quart se termine quand même, sans position.
+  assert.equal(f.corps.punch.lat_fin, null);
   assert.ok(f.corps.punch.fin >= f.corps.punch.debut);
   assert.equal((await marc('/api/punch')).corps.enCours, null);
   assert.equal((await marc(`/api/bureau/heures?${semaine()}`)).status, 403);
