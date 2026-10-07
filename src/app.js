@@ -342,6 +342,11 @@ export function completerTaxes(m) {
   // La lecture automatique renvoie parfois des taxes à 0 sur un reçu d'essence : l'avant-taxes manquant suffit.
   if (m.total == null || m.total <= 0 || m.sous_total != null) return m;
   const cents = Math.round(m.total * 100);
+  // Taxes imprimées sur le reçu (ex. Petro-Canada « TPS incl. ») : on les garde telles quelles.
+  if (m.tps > 0 && m.tvq > 0) {
+    const reste = cents - Math.round(m.tps * 100) - Math.round(m.tvq * 100);
+    if (reste > 0) return { sous_total: reste / 100, tps: m.tps, tvq: m.tvq, total: m.total };
+  }
   const sousTotal = Math.round(cents / 1.14975);
   const tps = Math.round(sousTotal * 0.05);
   return { sous_total: sousTotal / 100, tps: tps / 100, tvq: (cents - sousTotal - tps) / 100, total: m.total };

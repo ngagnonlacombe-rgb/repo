@@ -25,3 +25,9 @@ test('des taxes à 0 ou absentes ne bloquent pas le calcul', () => {
   assert.deepEqual(completerTaxes({ sous_total: null, tps: 5, tvq: null, total: 114.98 }),
     { sous_total: 100, tps: 5, tvq: 9.98, total: 114.98 });
 });
+
+test('taxes imprimées sur le reçu : on les garde et on en déduit l\'avant-taxes', () => {
+  // Reçu Petro-Canada : total 152,99 $, TPS incl. 6,65 $, TVQ incl. 13,27 $.
+  assert.deepEqual(completerTaxes({ sous_total: null, tps: 6.65, tvq: 13.27, total: 152.99 }),
+    { sous_total: 133.07, tps: 6.65, tvq: 13.27, total: 152.99 });
+});
