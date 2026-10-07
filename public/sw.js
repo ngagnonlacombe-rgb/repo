@@ -3,7 +3,7 @@ self.addEventListener('push', (e) => {
   let m = {};
   try { m = e.data.json(); } catch { m = { corps: e.data?.text() }; }
   e.waitUntil(self.registration.showNotification(m.titre || 'Vapro GUS', {
-    body: m.corps || '', icon: '/icone-192.png', badge: '/icone-192.png', data: { url: m.url || '/' }, tag: m.url, renotify: true,
+    body: m.corps || '', icon: '/logo-gus-192.png', badge: '/logo-gus-192.png', data: { url: m.url || '/' }, tag: m.url, renotify: true,
   }));
 });
 
