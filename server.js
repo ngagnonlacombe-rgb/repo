@@ -20,9 +20,10 @@ if (process.env.QBO_CLIENT_ID && !process.env.CLE_SECRETE) {
 
 const db = ouvrirBase(path.join(dossierDonnees, 'app.db'));
 const qbo = creerQuickBooks(db, {
-  clientId: process.env.QBO_CLIENT_ID,
-  clientSecret: process.env.QBO_CLIENT_SECRET,
-  urlRetour: process.env.QBO_URL_RETOUR,
+  // Les clés copiées-collées traînent souvent un espace ou un saut de ligne, qu'Intuit refuse.
+  clientId: process.env.QBO_CLIENT_ID?.trim(),
+  clientSecret: process.env.QBO_CLIENT_SECRET?.trim(),
+  urlRetour: process.env.QBO_URL_RETOUR?.trim(),
   environnement: process.env.QBO_ENVIRONNEMENT === 'production' ? 'production' : 'sandbox',
   cleSecrete: process.env.CLE_SECRETE,
 });
