@@ -351,7 +351,9 @@ function carteApprobation(f) {
   const compteCategorie = f.categorie ? listesQbo.comptesParCategorie?.[f.categorie] : null;
   const compteHabituel = compteCategorie || (fournisseur ? listesQbo.comptesHabituels[fournisseur.id] : null);
   const nomCategorie = f.categorie ? listesQbo.categories?.[f.categorie] : null;
-  const taxeQuebec = listesQbo.codesTaxe.find((t) => /tvq|qst/i.test(t.nom));
+  // Le serveur ne renvoie que les codes valides pour un achat, TPS + TVQ en premier.
+  const taxeQuebec = listesQbo.codesTaxe.find((t) => /tvq|qst/i.test(t.nom) && /tps|gst/i.test(t.nom))
+    || listesQbo.codesTaxe.find((t) => /tvq|qst/i.test(t.nom));
   const taxeDefaut = taxeQuebec || listesQbo.codesTaxe.find((t) => /qc/i.test(t.nom)) || listesQbo.codesTaxe[0];
   const options = (liste, choisi) => liste.map((x) => `<option value="${h(x.id)}" ${x.id === choisi ? 'selected' : ''}>${h(x.nom)}</option>`).join('');
 

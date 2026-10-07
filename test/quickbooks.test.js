@@ -23,6 +23,14 @@ function fauxIntuit() {
       }
       return json(200, { Bill: { Id: '901', TotalAmt: 114.98 } });
     }
+    if (u.pathname.endsWith('/query') && /TaxCode/.test(u.searchParams.get('query'))) {
+      const achat = { TaxRateDetail: [{ TaxRateRef: { value: '9' } }] };
+      return json(200, { QueryResponse: { TaxCode: [
+        { Id: '3', Name: 'QST QC - 9.975 (ventes)', SalesTaxRateList: achat, PurchaseTaxRateList: { TaxRateDetail: [] } },
+        { Id: '5', Name: 'Exempt', PurchaseTaxRateList: achat },
+        { Id: '7', Name: 'GST/QST QC - 9.975', SalesTaxRateList: achat, PurchaseTaxRateList: achat },
+      ] } });
+    }
     if (u.pathname.endsWith('/query')) return json(200, { QueryResponse: { Vendor: [{ Id: '2', DisplayName: 'RONA' }, { Id: '1', DisplayName: 'BMR' }] } });
     if (u.pathname.endsWith('/upload')) return json(200, { AttachableResponse: [{}] });
     return json(404, {});
@@ -99,4 +107,12 @@ test('une erreur QuickBooks remonte avec son message', async () => {
     qbo.creerFactureAPayer({ fournisseurId: '1', compteId: '1', codeTaxeId: undefined, date: '2026-10-01', sousTotal: 1 }),
     (e) => e instanceof ErreurQbo && /TaxCode requis/.test(e.message),
   );
+});
+
+test("seuls les codes de taxe valides pour un achat sont proposés, TPS + TVQ en premier", async () => {
+  fauxIntuit();
+  const db = ouvrirBase(':memory:');
+  const qbo = creerQuickBooks(db, config);
+  await qbo.terminerConnexion('code', '1');
+  assert.deepEqual((await qbo.codesTaxe()).map((t) => t.id), ['7', '5']);
 });

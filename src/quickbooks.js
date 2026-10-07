@@ -129,8 +129,14 @@ export function creerQuickBooks(db, config) {
     },
 
     async codesTaxe() {
-      const r = await requete('select Id, Name from TaxCode where Active = true');
-      return (r.TaxCode || []).map((t) => ({ id: t.Id, nom: t.Name }));
+      // Une facture fournisseur exige un code avec un taux d'achat : les codes « ventes seulement »
+      // font échouer QuickBooks (« error while calculating tax »).
+      const r = await requete('select * from TaxCode where Active = true');
+      const tpsEtTvq = (nom) => /tps|gst/i.test(nom) && /tvq|qst/i.test(nom);
+      return (r.TaxCode || [])
+        .filter((t) => t.PurchaseTaxRateList?.TaxRateDetail?.length)
+        .map((t) => ({ id: t.Id, nom: t.Name }))
+        .sort((a, b) => tpsEtTvq(b.nom) - tpsEtTvq(a.nom));
     },
 
     async creerFournisseur(nom) {
