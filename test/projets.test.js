@@ -220,3 +220,22 @@ test('un chargé de projet désigné par le bureau peut créer des projets', asy
   await bureau(`/api/bureau/utilisateurs/${idJulie}`, { method: 'PATCH', json: { chef_projet: false } });
   assert.equal((await julie('/api/projets', { method: 'POST', json: { nom: 'Autre' } })).status, 403);
 });
+
+test('lien du plan magicplan : posé par le bureau ou un chargé de projet, visible par tous', async () => {
+  const ouvrir = async () => (await marc(`/api/projets/${idProjet}`)).corps.projet;
+  assert.equal((await marc(`/api/projets/${idProjet}`, { method: 'PATCH', json: { magicplan_url: 'https://cloud.magicplan.app/x' } })).status, 403);
+  assert.equal((await bureau(`/api/projets/${idProjet}`, { method: 'PATCH', json: { magicplan_url: 'javascript:alert(1)' } })).status, 400);
+  assert.equal((await bureau(`/api/projets/${idProjet}`, { method: 'PATCH', json: { magicplan_url: 'http://exemple.com' } })).status, 400);
+  const r = await bureau(`/api/projets/${idProjet}`, { method: 'PATCH', json: { magicplan_url: 'Voici mon plan : https://cloud.magicplan.app/projects/abc123 ' } });
+  assert.equal(r.status, 200);
+  assert.equal((await ouvrir()).magicplan_url, 'https://cloud.magicplan.app/projects/abc123');
+  // Les notes d'un employé ne touchent pas au plan.
+  await marc(`/api/projets/${idProjet}`, { method: 'PATCH', json: { notes: 'ok' } });
+  assert.equal((await ouvrir()).magicplan_url, 'https://cloud.magicplan.app/projects/abc123');
+
+  const { utilisateurs } = (await bureau('/api/bureau/utilisateurs')).corps;
+  const idJulie = utilisateurs.find((u) => u.identifiant === 'julie').id;
+  await bureau(`/api/bureau/utilisateurs/${idJulie}`, { method: 'PATCH', json: { chef_projet: true } });
+  assert.equal((await julie(`/api/projets/${idProjet}`, { method: 'PATCH', json: { magicplan_url: '' } })).status, 200);
+  assert.equal((await ouvrir()).magicplan_url, null);
+});
