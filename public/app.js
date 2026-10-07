@@ -58,6 +58,7 @@ function pastille(statut) {
 // ---------- Routage ----------
 async function demarrer() {
   etat = await api('/api/etat');
+  navigator.serviceWorker?.register('/sw.js').catch(() => {});
   window.addEventListener('hashchange', route);
   route();
 }
@@ -72,6 +73,8 @@ function route() {
   if (!u) return vueConnexion();
   if (ancre.startsWith('facture/')) return vueEditionFacture(Number(ancre.split('/')[1]));
   if (ancre === 'projets' || ancre === 'projets/archives') return vueProjets(ancre === 'projets/archives');
+  if (ancre === 'messages') return u.role === 'bureau' ? vueConversations() : vueMessagerie();
+  if (ancre.startsWith('messages/') && u.role === 'bureau') return vueMessagerie(Number(ancre.split('/')[1]));
   if (ancre.startsWith('projet/')) return vueProjet(Number(ancre.split('/')[1]), ancre.split('/')[2], Number(ancre.split('/')[3]) || 0);
   if (u.role === 'bureau') {
     if (requete?.includes('qbo=ok')) avis('QuickBooks est connecté.');
@@ -85,6 +88,7 @@ function route() {
 }
 
 document.getElementById('btn-deconnexion').addEventListener('click', async () => {
+  await desabonnerNotifications();
   await api('/api/deconnexion', { method: 'POST' }).catch(() => {});
   etat.utilisateur = null;
   location.hash = '';
@@ -143,14 +147,31 @@ function vuePremierCompte() {
 // ---------- Employé ----------
 function ongletsBureau(actif) {
   const lien = (ancre, texte) => `<a href="#${ancre}" ${actif === ancre ? 'aria-current="page"' : ''}>${texte}</a>`;
+  const messages = lien('messages', 'Messages <span class="compteur" data-non-lus hidden></span>');
+  setTimeout(() => {
+    // Sur téléphone, le menu défile : on garde l'onglet ouvert visible.
+    document.querySelector('.onglets [aria-current="page"]')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+    majNonLus();
+  });
   if (etat.utilisateur.role !== 'bureau') {
-    return `<nav class="onglets">${lien('factures', 'Mes factures')}${lien('projets', 'Projets')}</nav>`;
+    return `<nav class="onglets">${lien('factures', 'Mes factures')}${lien('projets', 'Projets')}${messages}</nav>`;
   }
   return `<nav class="onglets">
-    ${lien('bureau/en_attente', 'À approuver')}${lien('bureau/approuvee', 'Approuvées')}
+    ${lien('bureau/en_attente', 'À approuver')}${messages}${lien('bureau/approuvee', 'Approuvées')}
     ${lien('bureau/refusee', 'Refusées')}${lien('factures', 'Déposer')}${lien('projets', 'Projets')}${lien('employes', 'Employés')}
   </nav>`;
 }
+
+// Pastille des messages non lus dans le menu, rafraîchie à chaque écran et chaque minute.
+async function majNonLus() {
+  const pastilles = document.querySelectorAll('[data-non-lus]');
+  if (!pastilles.length || !etat?.utilisateur) return;
+  try {
+    const { nonLus } = await api('/api/messagerie/non-lus');
+    pastilles.forEach((p) => { p.textContent = nonLus; p.hidden = !nonLus; });
+  } catch { /* réseau : on réessaie plus tard */ }
+}
+setInterval(() => { if (!document.hidden) majNonLus(); }, 60000);
 
 async function vueEmploye() {
   vue.innerHTML = `${ongletsBureau('factures')}
@@ -944,6 +965,169 @@ function ongletDiscussion(contenu, p, messages, ancre) {
     if (location.hash !== ancre || !document.body.contains(fil)) { clearInterval(minuterie); return; }
     if (document.hidden) return;
     try { ajouter((await api(`/api/projets/${id}?apres=${dernier}`)).messages); } catch { /* réseau : on réessaie */ }
+  }, 10000);
+}
+
+// ---------- Messagerie avec le bureau ----------
+async function vueConversations() {
+  const { conversations } = await api('/api/bureau/messagerie');
+  const apercu = (c) => (c.dernier_le ? `${c.dernier_photo && !c.dernier_texte ? '📷 Photo' : h(c.dernier_texte || '').slice(0, 80)} · ${heure(c.dernier_le)}`
+    : 'Aucun message');
+  vue.innerHTML = `${ongletsBureau('messages')}
+    <div id="carte-notifications"></div>
+    <p class="doux">Chaque employé a sa conversation privée avec le bureau.</p>
+    <div class="carte"><ul class="liste">${conversations.map((c) => `
+      <li>
+        <div class="infos"><a href="#messages/${c.id}"><strong>${h(c.nom)}</strong></a>
+          ${c.non_lus ? `<span class="compteur">${c.non_lus}</span>` : ''}
+          <div class="doux">${apercu(c)}</div></div>
+        <a class="bouton secondaire" href="#messages/${c.id}">Ouvrir</a>
+      </li>`).join('') || '<li class="vide">Aucun employé pour l\'instant.</li>'}</ul></div>`;
+  carteNotifications(document.getElementById('carte-notifications'));
+}
+
+function bulleMessagerie(m) {
+  const moi = etat.utilisateur;
+  const photo = `/api/messagerie/${m.id}/photo`;
+  const qui = moi.role !== 'bureau' && m.du_bureau ? `Bureau (${h(m.auteur)})` : h(m.auteur);
+  return `
+    <li class="message ${m.auteur_id === moi.id ? 'moi' : ''}" data-id="${m.id}">
+      <div class="doux"><strong>${qui}</strong> · ${heure(m.cree_le)}
+        ${m.auteur_id === moi.id ? `<button class="lien" type="button" data-effacer="${m.id}">Effacer</button>` : ''}</div>
+      ${m.photo ? `<a href="${photo}" target="_blank" rel="noopener"><img src="${photo}" alt="Photo envoyée" loading="lazy"></a>` : ''}
+      ${m.texte ? `<div class="texte">${h(m.texte)}</div>` : ''}
+    </li>`;
+}
+
+// ---------- Notifications sur le téléphone ----------
+// iPhone : les notifications ne marchent que si l'app est ajoutée à l'écran d'accueil et ouverte depuis son icône.
+const notificationsPossibles = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const iphoneHorsEcranAccueil = () => /iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone;
+
+async function abonnementActuel() {
+  if (!notificationsPossibles() || Notification.permission !== 'granted') return null;
+  const enregistrement = await navigator.serviceWorker.ready;
+  return enregistrement.pushManager.getSubscription();
+}
+
+async function activerNotifications() {
+  if (await Notification.requestPermission() !== 'granted') {
+    throw new Error('Les notifications sont bloquées. Autorise-les dans les réglages du téléphone pour cette app.');
+  }
+  const { cle } = await api('/api/notifications/cle');
+  const enregistrement = await navigator.serviceWorker.ready;
+  const abonnement = await enregistrement.pushManager.getSubscription()
+    || await enregistrement.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: Uint8Array.from(atob(cle.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0)) });
+  await api('/api/notifications/abonnement', { method: 'POST', json: abonnement.toJSON() });
+}
+
+async function desabonnerNotifications() {
+  try {
+    const abonnement = await abonnementActuel();
+    if (!abonnement) return;
+    await api('/api/notifications/abonnement', { method: 'DELETE', json: { endpoint: abonnement.endpoint } });
+    await abonnement.unsubscribe();
+  } catch { /* hors ligne : le serveur oubliera l'appareil au prochain envoi refusé */ }
+}
+
+// Carte affichée en haut des messages tant que ce téléphone ne reçoit pas les notifications.
+async function carteNotifications(conteneur) {
+  if (iphoneHorsEcranAccueil()) {
+    conteneur.innerHTML = `<div class="carte doux">Pour recevoir une notification à chaque message sur iPhone :
+      touche Partager, puis « Sur l'écran d'accueil », et ouvre Vapro GUS depuis son icône.</div>`;
+    return;
+  }
+  if (!notificationsPossibles()) return;
+  const abonnement = await abonnementActuel().catch(() => null);
+  if (abonnement) {
+    // Rattache l'appareil au compte connecté (utile si quelqu'un d'autre s'est connecté avant sur ce téléphone).
+    api('/api/notifications/abonnement', { method: 'POST', json: abonnement.toJSON() }).catch(() => {});
+    return;
+  }
+  conteneur.innerHTML = `<div class="carte"><p style="margin-top:0">Reçois une notification sur ce téléphone quand un message arrive.</p>
+    <button type="button" id="btn-notifications">Activer les notifications</button></div>`;
+  const bouton = document.getElementById('btn-notifications');
+  bouton.addEventListener('click', () => occuper(bouton, async () => {
+    await activerNotifications();
+    conteneur.innerHTML = '';
+    avis('Notifications activées sur ce téléphone.');
+  }));
+}
+
+// Employé : sa conversation avec le bureau. Bureau : la conversation d'un employé (employeId).
+async function vueMessagerie(employeId) {
+  const ancre = location.hash;
+  const chemin = employeId ? `/api/bureau/messagerie/${employeId}` : '/api/messagerie';
+  const { messages, employe } = await api(chemin);
+  let dernier = messages.at(-1)?.id || 0;
+  vue.innerHTML = `${ongletsBureau('messages')}
+    <div id="carte-notifications"></div>
+    ${employe ? `<p><a href="#messages">← Toutes les conversations</a></p><h1>${h(employe.nom)}</h1>`
+      : '<h1>Messages au bureau</h1><p class="doux">Seul le bureau voit cette conversation.</p>'}
+    <div class="carte"><ul class="liste fil" id="fil">${messages.map(bulleMessagerie).join('')
+      || `<li class="vide" id="fil-vide">${employe ? 'Aucun message avec cet employé.' : 'Aucun message. Écris au bureau ici.'}</li>`}</ul></div>
+    <form class="carte composer" id="f-message">
+      <input type="file" id="photo" accept="image/*" hidden>
+      <textarea name="texte" rows="3" placeholder="${employe ? `Écris à ${h(employe.nom)}…` : 'Écris au bureau…'}"></textarea>
+      <div class="doux" id="photo-choisie" hidden></div>
+      <div class="actions">
+        <button class="secondaire" type="button" id="btn-photo">Ajouter une photo</button>
+        <button>Envoyer</button>
+      </div>
+    </form>`;
+  majNonLus();
+  carteNotifications(document.getElementById('carte-notifications'));
+
+  const fil = document.getElementById('fil');
+  fil.lastElementChild?.scrollIntoView({ block: 'nearest' });
+  const ajouter = (liste) => {
+    if (!liste.length) return;
+    document.getElementById('fil-vide')?.remove();
+    for (const m of liste) {
+      if (fil.querySelector(`[data-id="${m.id}"]`)) continue;
+      fil.insertAdjacentHTML('beforeend', bulleMessagerie(m));
+      dernier = Math.max(dernier, m.id);
+    }
+  };
+
+  const form = document.getElementById('f-message');
+  const champ = document.getElementById('photo');
+  const choisie = document.getElementById('photo-choisie');
+  document.getElementById('btn-photo').addEventListener('click', () => champ.click());
+  champ.addEventListener('change', () => {
+    choisie.hidden = !champ.files[0];
+    choisie.textContent = champ.files[0] ? `Photo prête à envoyer : ${champ.files[0].name}` : '';
+  });
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const texte = form.texte.value.trim();
+    if (!texte && !champ.files[0]) { avis('Écris un message ou ajoute une photo.'); return; }
+    occuper(form.querySelector('button:not([type])'), async () => {
+      const donnees = new FormData();
+      donnees.append('texte', texte);
+      if (champ.files[0]) donnees.append('photo', await reduireImage(champ.files[0]));
+      const { message } = await api(chemin, { method: 'POST', body: donnees });
+      ajouter([message]);
+      form.reset();
+      choisie.hidden = true;
+      fil.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+  });
+
+  fil.addEventListener('click', (e) => {
+    const bouton = e.target.closest('[data-effacer]');
+    if (!bouton || !confirm('Effacer ce message ?')) return;
+    occuper(bouton, async () => {
+      await api(`/api/messagerie/${bouton.dataset.effacer}`, { method: 'DELETE' });
+      bouton.closest('li').remove();
+    });
+  });
+
+  // Réponses : vérifiées toutes les 10 secondes tant que la conversation est ouverte.
+  const minuterie = setInterval(async () => {
+    if (location.hash !== ancre || !document.body.contains(fil)) { clearInterval(minuterie); return; }
+    if (document.hidden) return;
+    try { ajouter((await api(`${chemin}?apres=${dernier}`)).messages); } catch { /* réseau : on réessaie */ }
   }, 10000);
 }
 

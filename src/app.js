@@ -10,6 +10,8 @@ import {
 import { lireReglage, ecrireReglage } from './db.js';
 import { ErreurQbo } from './quickbooks.js';
 import { brancherProjets } from './projets.js';
+import { brancherMessagerie } from './messagerie.js';
+import { creerNotifieur } from './notifications.js';
 
 const TYPES_ACCEPTES = {
   'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'application/pdf': 'pdf',
@@ -33,7 +35,7 @@ function categorieLue(f) {
   } catch { return null; }
 }
 
-export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false, dossierPublic, codeInstallation }) {
+export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false, dossierPublic, codeInstallation, notifieur = creerNotifieur(db) }) {
   const app = express();
   const limiteur = limiteurConnexion();
   const enTraitement = new Set();
@@ -335,6 +337,8 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
   });
 
   brancherProjets(app, { db, dossierFichiers });
+  notifieur.brancher(app);
+  brancherMessagerie(app, { db, dossierFichiers, notifieur });
 
   app.use('/api', (_req, res) => res.status(404).json({ erreur: 'Adresse inconnue.' }));
 
