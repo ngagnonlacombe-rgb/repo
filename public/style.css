@@ -124,9 +124,17 @@ a.bouton.secondaire { background: transparent; color: var(--accent-lien); }
 .geant.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 #note-quart { width: 100%; margin-bottom: 10px; }
 .semaine { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; text-align: center; }
-.heures-employe summary { display: flex; justify-content: space-between; cursor: pointer; font-size: 17px; list-style: none; }
+.heures-employe summary { display: flex; flex-wrap: wrap; justify-content: space-between; cursor: pointer; font-size: 17px; list-style: none; }
 .heures-employe summary::-webkit-details-marker { display: none; }
 .heures-employe summary span { font-weight: 700; }
 .heures-employe[open] summary { margin-bottom: 8px; }
 .correction label { display: block; margin-bottom: 8px; }
 .correction input { width: 100%; }
+.soldes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px; }
+.solde { background: var(--carte); border: 1px solid var(--bord); border-radius: var(--rayon); padding: 10px 8px; text-align: center; }
+.solde span { display: block; font-size: 13px; }
+.solde strong { display: block; font-size: 20px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.solde.negatif strong { color: var(--danger); }
+.soldes-ligne { flex-basis: 100%; margin-top: 4px; font-size: 13px; font-weight: 400; }
+#f-mouvement label, #f-taux label, #f-regles label { display: block; margin-bottom: 8px; }
+#f-mouvement input, #f-mouvement select, #f-taux input, #f-regles input, #f-regles select { width: 100%; }
