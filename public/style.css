@@ -78,9 +78,15 @@ button:disabled { opacity: .55; cursor: progress; }
 .fil .message img { display: block; max-width: 100%; max-height: 360px; border-radius: 8px; margin-top: 8px; }
 .fil .message .texte { margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .fil .message .lien { margin-left: 8px; font-size: 13px; color: var(--doux); }
+.galerie { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.galerie figure { margin: 0; background: var(--carte); border: 1px solid var(--bord); border-radius: var(--rayon); overflow: hidden; }
+.galerie img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; }
+.galerie figcaption { padding: 6px 8px; font-size: 12px; }
+.galerie .lien { font-size: 12px; color: var(--doux); }
 a.bouton.secondaire { background: transparent; color: var(--accent); }
 .vide { text-align: center; color: var(--doux); padding: 24px 0; }
 @media (max-width: 720px) {
+  .onglets a { padding: 10px 10px; }
   .approbation { grid-template-columns: 1fr; }
   .apercu iframe { height: 420px; }
 }

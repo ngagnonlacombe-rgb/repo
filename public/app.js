@@ -72,7 +72,7 @@ function route() {
   if (!u) return vueConnexion();
   if (ancre.startsWith('facture/')) return vueEditionFacture(Number(ancre.split('/')[1]));
   if (ancre === 'projets' || ancre === 'projets/archives') return vueProjets(ancre === 'projets/archives');
-  if (ancre.startsWith('projet/')) return vueProjet(Number(ancre.split('/')[1]));
+  if (ancre.startsWith('projet/')) return vueProjet(Number(ancre.split('/')[1]), ancre.split('/')[2]);
   if (u.role === 'bureau') {
     if (requete?.includes('qbo=ok')) avis('QuickBooks est connecté.');
     if (requete?.includes('qbo=echec')) avis('La connexion à QuickBooks a échoué. Réessaie.');
@@ -460,7 +460,7 @@ async function vueProjets(archives) {
     <div class="carte"><ul class="liste">${projets.length ? projets.map((p) => `
       <li>
         <div class="infos"><a href="#projet/${p.id}"><strong>${h(p.nom)}</strong></a>
-          <div class="doux">${p.adresse ? `${h(p.adresse)} · ` : ''}${p.nb_messages} message(s) · ${p.nb_photos} photo(s)</div></div>
+          <div class="doux">${p.adresse ? `${h(p.adresse)} · ` : ''}${p.nb_messages} message(s) · ${p.nb_photos} photo(s) · ${p.nb_documents} document(s)</div></div>
         <a class="bouton secondaire" href="#projet/${p.id}">Ouvrir</a>
       </li>`).join('') : `<li class="vide">${archives ? 'Aucun projet archivé.' : 'Aucun projet en cours.'}</li>`}</ul></div>
     ${bureau && !archives ? `
@@ -497,22 +497,126 @@ function bulleMessage(m, idProjet) {
     </li>`;
 }
 
-async function vueProjet(id) {
+const ONGLETS_PROJET = { discussion: 'Discussion', photos: 'Photos', documents: 'Documents', notes: 'Notes' };
+const taille = (o) => (o >= 1024 * 1024 ? `${(o / 1024 / 1024).toFixed(1).replace('.', ',')} Mo` : `${Math.max(1, Math.round(o / 1024))} Ko`);
+
+async function vueProjet(id, onglet) {
+  if (!ONGLETS_PROJET[onglet]) onglet = 'discussion';
   const ancre = location.hash;
   const { projet: p, messages } = await api(`/api/projets/${id}`);
   const bureau = etat.utilisateur.role === 'bureau';
-  let dernier = messages.at(-1)?.id || 0;
+  const moi = etat.utilisateur;
 
   vue.innerHTML = `${ongletsBureau('projets')}
     <p><a href="#projets">← Tous les projets</a></p>
     <h1>${h(p.nom)}${p.actif ? '' : ' <span class="pastille s-brouillon">Archivé</span>'}</h1>
     ${p.adresse ? `<p class="doux"><a href="https://maps.google.com/?q=${encodeURIComponent(p.adresse)}" target="_blank" rel="noopener">${h(p.adresse)}</a></p>` : ''}
+    <nav class="onglets">${Object.entries(ONGLETS_PROJET).map(([cle, nom]) =>
+      `<a href="#projet/${id}/${cle}" ${cle === onglet ? 'aria-current="page"' : ''}>${nom}</a>`).join('')}</nav>
+    <div id="contenu-projet"></div>
+    ${bureau ? `<div class="actions"><button class="${p.actif ? 'danger' : 'secondaire'}" type="button" id="btn-archiver">
+      ${p.actif ? 'Archiver le projet' : 'Réactiver le projet'}</button></div>` : ''}`;
+
+  document.getElementById('btn-archiver')?.addEventListener('click', (e) => {
+    if (p.actif && !confirm('Archiver ce projet ? Les employés ne le verront plus.')) return;
+    occuper(e.currentTarget, async () => {
+      await api(`/api/projets/${id}`, { method: 'PATCH', json: { actif: !p.actif } });
+      location.hash = 'projets';
+    });
+  });
+
+  const contenu = document.getElementById('contenu-projet');
+  if (onglet === 'notes') return ongletNotes(contenu, p);
+  if (onglet === 'photos' || onglet === 'documents') return ongletDossier(contenu, p, onglet, moi);
+  return ongletDiscussion(contenu, p, messages, ancre);
+}
+
+function ongletNotes(contenu, p) {
+  contenu.innerHTML = `
     <form class="carte" id="f-notes">
       <label for="notes">Notes du projet (visibles par toute l'équipe)</label>
-      <textarea id="notes" name="notes" rows="5" placeholder="Matériaux, mesures, codes de porte, contacts…">${h(p.notes)}</textarea>
-      <div class="actions"><button class="secondaire">Enregistrer les notes</button></div>
-    </form>
-    <h2>Discussion et photos</h2>
+      <textarea id="notes" name="notes" rows="10" placeholder="Matériaux, mesures, codes de porte, contacts…">${h(p.notes)}</textarea>
+      <div class="actions"><button>Enregistrer les notes</button></div>
+    </form>`;
+  const form = document.getElementById('f-notes');
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    occuper(form.querySelector('button'), async () => {
+      await api(`/api/projets/${p.id}`, { method: 'PATCH', json: { notes: form.notes.value } });
+      avis('Notes enregistrées.');
+    });
+  });
+}
+
+async function ongletDossier(contenu, p, dossier, moi) {
+  const photos = dossier === 'photos';
+  contenu.innerHTML = `
+    ${p.actif ? `<input type="file" id="fichier-dossier" ${photos ? 'accept="image/*" multiple'
+      : 'accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,image/*" multiple'} hidden>
+    <button class="pleine" type="button" id="btn-deposer">${photos ? 'Ajouter des photos' : 'Ajouter des documents'}</button>
+    <p class="doux" style="text-align:center">${photos ? 'Les photos envoyées dans la discussion apparaissent aussi ici.'
+      : 'PDF, Word, Excel, texte ou image, 25 Mo maximum par fichier.'}</p>` : ''}
+    <div id="liste-dossier"><p class="vide">Chargement…</p></div>`;
+
+  const afficher = async () => {
+    const { fichiers } = await api(`/api/projets/${p.id}/dossiers/${dossier}`);
+    const liste = document.getElementById('liste-dossier');
+    if (!liste) return;
+    const effacable = (f) => f.source !== 'discussion' && (f.auteur_id === moi.id || moi.role === 'bureau');
+    if (!fichiers.length) {
+      liste.innerHTML = `<div class="carte vide">${photos ? 'Aucune photo pour l\'instant.' : 'Aucun document pour l\'instant.'}</div>`;
+    } else if (photos) {
+      liste.innerHTML = `<div class="galerie">${fichiers.map((f) => `
+        <figure>
+          <a href="${f.url}" target="_blank" rel="noopener"><img src="${f.url}" alt="Photo du projet" loading="lazy"></a>
+          <figcaption class="doux">${h(f.auteur)} · ${heure(f.cree_le)}
+            ${effacable(f) ? `<button class="lien" type="button" data-effacer="${f.id}">Effacer</button>` : ''}</figcaption>
+        </figure>`).join('')}</div>`;
+    } else {
+      liste.innerHTML = `<div class="carte"><ul class="liste">${fichiers.map((f) => `
+        <li>
+          <div class="infos"><a href="${f.url}" target="_blank" rel="noopener"><strong>${h(f.nom_original || 'Document')}</strong></a>
+            <div class="doux">${h(f.auteur)} · ${heure(f.cree_le)} · ${taille(f.taille)}</div></div>
+          ${effacable(f) ? `<button class="danger" type="button" data-effacer="${f.id}">Effacer</button>` : ''}
+        </li>`).join('')}</ul></div>`;
+    }
+  };
+
+  const champ = document.getElementById('fichier-dossier');
+  const bouton = document.getElementById('btn-deposer');
+  bouton?.addEventListener('click', () => champ.click());
+  champ?.addEventListener('change', () => {
+    const choisis = [...champ.files];
+    if (!choisis.length) return;
+    occuper(bouton, async () => {
+      for (const [i, fichier] of choisis.entries()) {
+        bouton.textContent = `Envoi ${i + 1} de ${choisis.length}…`;
+        const donnees = new FormData();
+        donnees.append('fichier', photos ? await reduireImage(fichier) : fichier, fichier.name);
+        await api(`/api/projets/${p.id}/dossiers/${dossier}`, { method: 'POST', body: donnees });
+      }
+      avis(choisis.length > 1 ? `${choisis.length} fichiers ajoutés.` : 'Fichier ajouté.');
+      await afficher();
+    });
+    champ.value = '';
+  });
+
+  contenu.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-effacer]');
+    if (!b || !confirm('Effacer ce fichier ?')) return;
+    occuper(b, async () => {
+      await api(`/api/projets/${p.id}/fichiers/${b.dataset.effacer}`, { method: 'DELETE' });
+      await afficher();
+    });
+  });
+
+  await afficher();
+}
+
+function ongletDiscussion(contenu, p, messages, ancre) {
+  const id = p.id;
+  let dernier = messages.at(-1)?.id || 0;
+  contenu.innerHTML = `
     <div class="carte"><ul class="liste fil" id="fil">${messages.map((m) => bulleMessage(m, id)).join('')
       || '<li class="vide" id="fil-vide">Aucun message. Lance la discussion ou ajoute une photo.</li>'}</ul></div>
     ${p.actif ? `
@@ -524,9 +628,7 @@ async function vueProjet(id) {
         <button class="secondaire" type="button" id="btn-photo">Ajouter une photo</button>
         <button>Envoyer</button>
       </div>
-    </form>` : ''}
-    ${bureau ? `<div class="actions"><button class="${p.actif ? 'danger' : 'secondaire'}" type="button" id="btn-archiver">
-      ${p.actif ? 'Archiver le projet' : 'Réactiver le projet'}</button></div>` : ''}`;
+    </form>` : ''}`;
 
   const fil = document.getElementById('fil');
   const ajouter = (liste) => {
@@ -538,15 +640,6 @@ async function vueProjet(id) {
       dernier = Math.max(dernier, m.id);
     }
   };
-
-  const formNotes = document.getElementById('f-notes');
-  formNotes.addEventListener('submit', (e) => {
-    e.preventDefault();
-    occuper(formNotes.querySelector('button'), async () => {
-      await api(`/api/projets/${id}`, { method: 'PATCH', json: { notes: formNotes.notes.value } });
-      avis('Notes enregistrées.');
-    });
-  });
 
   const formMessage = document.getElementById('f-message');
   if (formMessage) {
@@ -583,15 +676,7 @@ async function vueProjet(id) {
     });
   });
 
-  document.getElementById('btn-archiver')?.addEventListener('click', (e) => {
-    if (p.actif && !confirm('Archiver ce projet ? Les employés ne le verront plus.')) return;
-    occuper(e.currentTarget, async () => {
-      await api(`/api/projets/${id}`, { method: 'PATCH', json: { actif: !p.actif } });
-      location.hash = 'projets';
-    });
-  });
-
-  // Nouveaux messages des collègues : vérifiés toutes les 10 secondes tant que le projet est ouvert.
+  // Nouveaux messages des collègues : vérifiés toutes les 10 secondes tant que la discussion est ouverte.
   const minuterie = setInterval(async () => {
     if (location.hash !== ancre || !document.body.contains(fil)) { clearInterval(minuterie); return; }
     if (document.hidden) return;

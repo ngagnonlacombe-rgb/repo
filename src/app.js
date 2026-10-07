@@ -341,7 +341,7 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
   // eslint-disable-next-line no-unused-vars
   app.use((err, _req, res, _next) => {
     if (err instanceof ErreurQbo) return res.status(502).json({ erreur: `QuickBooks : ${err.message}` });
-    if (err instanceof multer.MulterError) return res.status(400).json({ erreur: 'Fichier trop gros (15 Mo max).' });
+    if (err instanceof multer.MulterError) return res.status(400).json({ erreur: 'Fichier trop gros (15 Mo max pour une photo ou une facture, 25 Mo pour un document).' });
     console.error(err);
     res.status(500).json({ erreur: 'Erreur inattendue. Réessaie.' });
   });

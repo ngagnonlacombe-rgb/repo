@@ -7,6 +7,19 @@ import { exigerConnexion, exigerBureau } from './auth.js';
 
 const PHOTOS = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/heic': 'heic' };
 
+// Dossier Documents : plans, soumissions, devis, permis… (PDF, Office, texte, images).
+const DOCUMENTS = {
+  ...PHOTOS,
+  'application/pdf': 'pdf',
+  'application/msword': 'doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.ms-excel': 'xls',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'text/plain': 'txt',
+  'text/csv': 'csv',
+};
+const TYPES_PAR_DOSSIER = { photos: PHOTOS, documents: DOCUMENTS };
+
 const texte = (v, max) => {
   if (v == null) return null;
   const t = String(v).trim();
@@ -22,6 +35,12 @@ export function brancherProjets(app, { db, dossierFichiers }) {
     fileFilter: (_req, f, cb) => cb(null, Boolean(PHOTOS[f.mimetype])),
   });
 
+  const depot = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 25 * 1024 * 1024, files: 1 },
+    fileFilter: (req, f, cb) => cb(null, Boolean(TYPES_PAR_DOSSIER[req.params.dossier]?.[f.mimetype])),
+  });
+
   const projet = (id) => db.prepare('SELECT * FROM projets WHERE id = ?').get(id);
   const avecAuteur = `SELECT m.id, m.projet_id, m.texte, m.cree_le, m.fichier IS NOT NULL AS photo, m.auteur_id,
                              u.nom AS auteur FROM projet_messages m JOIN utilisateurs u ON u.id = m.auteur_id`;
@@ -33,7 +52,9 @@ export function brancherProjets(app, { db, dossierFichiers }) {
     const projets = db.prepare(`
       SELECT p.id, p.nom, p.adresse, p.actif, p.maj_le,
              (SELECT COUNT(*) FROM projet_messages m WHERE m.projet_id = p.id) AS nb_messages,
-             (SELECT COUNT(*) FROM projet_messages m WHERE m.projet_id = p.id AND m.fichier IS NOT NULL) AS nb_photos
+             (SELECT COUNT(*) FROM projet_messages m WHERE m.projet_id = p.id AND m.fichier IS NOT NULL)
+               + (SELECT COUNT(*) FROM projet_fichiers f WHERE f.projet_id = p.id AND f.dossier = 'photos') AS nb_photos,
+             (SELECT COUNT(*) FROM projet_fichiers f WHERE f.projet_id = p.id AND f.dossier = 'documents') AS nb_documents
       FROM projets p WHERE p.actif = ? ORDER BY p.maj_le DESC LIMIT 200`).all(archives ? 0 : 1);
     res.json({ projets });
   });
@@ -98,6 +119,65 @@ export function brancherProjets(app, { db, dossierFichiers }) {
     if (!visible(p, req.utilisateur) || !m?.fichier) return res.status(404).json({ erreur: 'Photo introuvable.' });
     res.type(m.type_mime).set('Cache-Control', 'private, max-age=86400')
       .sendFile(path.join(dossier, m.fichier), { dotfiles: 'deny' });
+  });
+
+  // ---------- Dossiers Photos et Documents ----------
+  // Le dossier Photos montre aussi les photos envoyées dans la discussion.
+  app.get('/api/projets/:id/dossiers/:dossier', exigerConnexion, (req, res) => {
+    const p = projet(Number(req.params.id));
+    const { dossier: nomDossier } = req.params;
+    if (!visible(p, req.utilisateur) || !TYPES_PAR_DOSSIER[nomDossier]) return res.status(404).json({ erreur: 'Dossier introuvable.' });
+    const fichiers = db.prepare(`
+      SELECT f.id, f.nom_original, f.type_mime, f.taille, f.cree_le AS cree_le, f.auteur_id, u.nom AS auteur,
+             '/api/projets/' || f.projet_id || '/fichiers/' || f.id AS url, 'dossier' AS source
+      FROM projet_fichiers f JOIN utilisateurs u ON u.id = f.auteur_id
+      WHERE f.projet_id = ? AND f.dossier = ?
+      ${nomDossier === 'photos' ? `UNION ALL
+      SELECT m.id, NULL, m.type_mime, NULL, m.cree_le, m.auteur_id, u.nom,
+             '/api/projets/' || m.projet_id || '/messages/' || m.id || '/photo', 'discussion'
+      FROM projet_messages m JOIN utilisateurs u ON u.id = m.auteur_id
+      WHERE m.projet_id = ? AND m.fichier IS NOT NULL` : ''}
+      ORDER BY cree_le DESC LIMIT 500`).all(...(nomDossier === 'photos' ? [p.id, nomDossier, p.id] : [p.id, nomDossier]));
+    res.json({ fichiers });
+  });
+
+  app.post('/api/projets/:id/dossiers/:dossier', exigerConnexion, depot.single('fichier'), (req, res) => {
+    const p = projet(Number(req.params.id));
+    const types = TYPES_PAR_DOSSIER[req.params.dossier];
+    if (!visible(p, req.utilisateur) || !p.actif || !types) return res.status(404).json({ erreur: 'Dossier introuvable.' });
+    if (!req.file) {
+      return res.status(400).json({ erreur: req.params.dossier === 'photos'
+        ? 'Choisis une photo.' : 'Type de fichier non accepté (PDF, Word, Excel, texte ou image).' });
+    }
+    const fichier = `${crypto.randomUUID()}.${types[req.file.mimetype]}`;
+    fs.writeFileSync(path.join(dossier, fichier), req.file.buffer);
+    // Les navigateurs envoient le nom en latin1 : on le remet en UTF-8 pour garder les accents.
+    const nom = texte(Buffer.from(req.file.originalname || '', 'latin1').toString('utf8'), 200);
+    const { lastInsertRowid } = db.prepare(`INSERT INTO projet_fichiers
+      (projet_id, auteur_id, dossier, fichier, nom_original, type_mime, taille) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(p.id, req.utilisateur.id, req.params.dossier, fichier, nom, req.file.mimetype, req.file.size);
+    db.prepare("UPDATE projets SET maj_le = datetime('now') WHERE id = ?").run(p.id);
+    res.status(201).json({ fichier: { id: Number(lastInsertRowid), nom_original: nom } });
+  });
+
+  app.get('/api/projets/:id/fichiers/:fid', exigerConnexion, (req, res) => {
+    const p = projet(Number(req.params.id));
+    const f = db.prepare('SELECT * FROM projet_fichiers WHERE id = ? AND projet_id = ?').get(Number(req.params.fid), p?.id);
+    if (!visible(p, req.utilisateur) || !f) return res.status(404).json({ erreur: 'Fichier introuvable.' });
+    res.type(f.type_mime).set('Cache-Control', 'private, max-age=86400');
+    // Les images et les PDF s'ouvrent dans le navigateur ; le reste se télécharge avec son nom d'origine.
+    if (!/^image\/|^application\/pdf$/.test(f.type_mime)) res.attachment(f.nom_original || f.fichier);
+    res.sendFile(path.join(dossier, f.fichier), { dotfiles: 'deny' });
+  });
+
+  app.delete('/api/projets/:id/fichiers/:fid', exigerConnexion, (req, res) => {
+    const f = db.prepare('SELECT * FROM projet_fichiers WHERE id = ? AND projet_id = ?').get(Number(req.params.fid), Number(req.params.id));
+    if (!f || (f.auteur_id !== req.utilisateur.id && req.utilisateur.role !== 'bureau')) {
+      return res.status(404).json({ erreur: 'Fichier introuvable.' });
+    }
+    db.prepare('DELETE FROM projet_fichiers WHERE id = ?').run(f.id);
+    fs.rm(path.join(dossier, f.fichier), { force: true }, () => {});
+    res.status(204).end();
   });
 
   app.delete('/api/projets/:id/messages/:mid', exigerConnexion, (req, res) => {

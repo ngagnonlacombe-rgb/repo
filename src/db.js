@@ -73,6 +73,19 @@ export function ouvrirBase(fichier) {
     );
     CREATE INDEX IF NOT EXISTS projet_messages_projet ON projet_messages (projet_id, id);
 
+    CREATE TABLE IF NOT EXISTS projet_fichiers (
+      id INTEGER PRIMARY KEY,
+      projet_id INTEGER NOT NULL REFERENCES projets(id) ON DELETE CASCADE,
+      auteur_id INTEGER NOT NULL REFERENCES utilisateurs(id),
+      dossier TEXT NOT NULL CHECK (dossier IN ('photos', 'documents')),
+      fichier TEXT NOT NULL,
+      nom_original TEXT,
+      type_mime TEXT NOT NULL,
+      taille INTEGER NOT NULL,
+      cree_le TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS projet_fichiers_projet ON projet_fichiers (projet_id, dossier, id);
+
     CREATE TABLE IF NOT EXISTS reglages (
       cle TEXT PRIMARY KEY,
       valeur TEXT NOT NULL
