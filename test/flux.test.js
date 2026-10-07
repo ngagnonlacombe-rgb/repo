@@ -20,7 +20,7 @@ before(async () => {
     async lire(contenu, typeMime) {
       lectures.push(typeMime);
       return { est_une_facture: true, fournisseur: 'RONA inc.', numero: 'A-123', date_facture: '2026-10-01',
-        sous_total: 100, tps: 5, tvq: 9.98, total: 114.98 };
+        sous_total: 100, tps: 5, tvq: 9.98, total: 114.98, categorie: 'materiaux' };
     },
   };
   db = ouvrirBase(':memory:');
@@ -213,4 +213,23 @@ test('une facture envoyée avant le calcul automatique arrive au bureau avec les
   db.prepare('UPDATE factures SET sous_total = NULL, tps = NULL, tvq = NULL WHERE id = ?').run(id);
   const f = (await bureau('/api/bureau/factures')).corps.factures.find((x) => x.id === id);
   assert.deepEqual([f.sous_total, f.tps, f.tvq], [100, 5, 9.98]);
+});
+
+test('catégorie lue sur la facture : compte proposé, puis retenu après approbation', async () => {
+  const listes = (await bureau('/api/bureau/listes')).corps;
+  const nom = (id) => listes.comptes.find((c) => c.id === id)?.nom;
+  assert.equal(nom(listes.comptesParCategorie.materiaux), 'Matériaux et fournitures');
+  assert.equal(nom(listes.comptesParCategorie.carburant), 'Frais de véhicule');
+  assert.equal(nom(listes.comptesParCategorie.outillage), 'Outillage (petit équipement)');
+  assert.equal(listes.comptesParCategorie.disposition_dechets, null);
+
+  const f = (await bureau('/api/bureau/factures')).corps.factures.at(-1);
+  assert.equal(f.categorie, 'materiaux');
+  const reparations = listes.comptes.find((c) => c.nom === 'Réparations et entretien');
+  const r = await bureau(`/api/bureau/factures/${f.id}/approuver`, {
+    method: 'POST', json: { fournisseurId: '1', compteId: reparations.id, codeTaxeId: 'T1', date: '2026-10-03', sousTotal: '100' },
+  });
+  assert.equal(r.status, 200);
+  assert.match(qbo.creees.at(-1).description, /^Matériaux, déposée par/);
+  assert.equal((await bureau('/api/bureau/listes')).corps.comptesParCategorie.materiaux, reparations.id);
 });

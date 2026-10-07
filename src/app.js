@@ -15,6 +15,23 @@ const TYPES_ACCEPTES = {
 };
 const CHAMPS_MONTANT = ['sous_total', 'tps', 'tvq', 'total'];
 
+// Catégories reconnues à la lecture de la facture, et les mots qui les retrouvent dans les comptes QuickBooks.
+export const CATEGORIES = {
+  // Mots par ordre de priorité : « Matériaux et fournitures » doit passer avant « Frais de bureau / Fournitures ».
+  carburant: { nom: 'Carburant', mots: [/carburant|essence|diesel|fuel/, /vehicule|vehicle|automobile/] },
+  materiaux: { nom: 'Matériaux', mots: [/materiau|material/, /fourniture|supplies/] },
+  outillage: { nom: 'Outillage', mots: [/outil|tool/, /petit equipement|small equipment/] },
+  disposition_dechets: { nom: 'Disposition de déchets', mots: [/dechet|waste|ecocentre|conteneur|dump/, /disposition/] },
+};
+const sansAccents = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+function categorieLue(f) {
+  try {
+    const c = JSON.parse(f.lecture_auto || 'null')?.categorie;
+    return CATEGORIES[c] ? c : null;
+  } catch { return null; }
+}
+
 export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false, dossierPublic, codeInstallation }) {
   const app = express();
   const limiteur = limiteurConnexion();
@@ -162,13 +179,21 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
     const ordre = statut === 'en_attente' ? 'f.maj_le ASC' : 'f.maj_le DESC';
     const factures = db.prepare(`${avecEmploye} WHERE f.statut = ? ORDER BY ${ordre} LIMIT 200`).all(statut);
     // Factures envoyées avant le calcul automatique : on complète aussi l'affichage pour le bureau.
-    res.json({ factures: factures.map((f) => ({ ...f, ...completerTaxes(f) })) });
+    res.json({ factures: factures.map((f) => ({ ...f, ...completerTaxes(f), categorie: categorieLue(f) })) });
   });
 
   app.get('/api/bureau/listes', exigerConnexion, exigerBureau, async (_req, res, next) => {
     try {
       const [fournisseurs, comptes, codesTaxe] = await Promise.all([qbo.fournisseurs(), qbo.comptes(), qbo.codesTaxe()]);
-      res.json({ fournisseurs, comptes, codesTaxe, comptesHabituels: lireReglage(db, 'compte_par_fournisseur') || {} });
+      // Pour chaque catégorie : le compte choisi la dernière fois, sinon le premier compte dont le nom correspond.
+      const appris = lireReglage(db, 'compte_par_categorie') || {};
+      const comptesParCategorie = Object.fromEntries(Object.entries(CATEGORIES).map(([cle, { mots }]) => [cle,
+        (comptes.some((c) => c.id === appris[cle]) && appris[cle]) || mots.map((m) => comptes.find((c) => m.test(sansAccents(c.nom)))).find(Boolean)?.id || null]));
+      res.json({
+        fournisseurs, comptes, codesTaxe, comptesParCategorie,
+        categories: Object.fromEntries(Object.entries(CATEGORIES).map(([cle, { nom }]) => [cle, nom])),
+        comptesHabituels: lireReglage(db, 'compte_par_fournisseur') || {},
+      });
     } catch (e) { next(e); }
   });
 
@@ -197,7 +222,7 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
       const resultat = await qbo.creerFactureAPayer({
         fournisseurId: fournisseur.id, compteId: String(b.compteId), codeTaxeId: String(b.codeTaxeId),
         date, numero: texte(b.numero, 40), sousTotal, total: montant(b.total),
-        description: `Matériaux, déposée par ${employe}`,
+        description: `${CATEGORIES[categorieLue(f)]?.nom || 'Achat'}, déposée par ${employe}`,
         note: [`Déposée par ${employe} via l'app employés (facture #${f.id}).`, f.note].filter(Boolean).join(' '),
       });
 
@@ -208,6 +233,10 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
       const habituels = lireReglage(db, 'compte_par_fournisseur') || {};
       habituels[fournisseur.id] = String(b.compteId);
       ecrireReglage(db, 'compte_par_fournisseur', habituels);
+      const categorie = categorieLue(f);
+      if (categorie) {
+        ecrireReglage(db, 'compte_par_categorie', { ...lireReglage(db, 'compte_par_categorie'), [categorie]: String(b.compteId) });
+      }
 
       let pieceJointe = true;
       try {
