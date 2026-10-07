@@ -351,7 +351,8 @@ function carteApprobation(f) {
   const compteCategorie = f.categorie ? listesQbo.comptesParCategorie?.[f.categorie] : null;
   const compteHabituel = compteCategorie || (fournisseur ? listesQbo.comptesHabituels[fournisseur.id] : null);
   const nomCategorie = f.categorie ? listesQbo.categories?.[f.categorie] : null;
-  const taxeDefaut = listesQbo.codesTaxe.find((t) => /tvq|qst|qc/i.test(t.nom)) || listesQbo.codesTaxe[0];
+  const taxeQuebec = listesQbo.codesTaxe.find((t) => /tvq|qst/i.test(t.nom));
+  const taxeDefaut = taxeQuebec || listesQbo.codesTaxe.find((t) => /qc/i.test(t.nom)) || listesQbo.codesTaxe[0];
   const options = (liste, choisi) => liste.map((x) => `<option value="${h(x.id)}" ${x.id === choisi ? 'selected' : ''}>${h(x.nom)}</option>`).join('');
 
   return `
@@ -371,15 +372,18 @@ function carteApprobation(f) {
         <select name="compteId" required>
           <option value="">— Choisir —</option>${options(listesQbo.comptes, compteHabituel)}
         </select>
-        <label>Code de taxe</label>
-        <select name="codeTaxeId" required>${options(listesQbo.codesTaxe, taxeDefaut?.id)}</select>
+        ${taxeQuebec
+          // Tous les achats sont soumis à la TPS et à la TVQ : pas de choix à faire.
+          ? `<input type="hidden" name="codeTaxeId" value="${h(taxeQuebec.id)}">`
+          : `<label>Code de taxe</label>
+        <select name="codeTaxeId" required>${options(listesQbo.codesTaxe, taxeDefaut?.id)}</select>`}
         <div class="grille2">
           <div><label>Date</label><input name="date" type="date" value="${h(f.date_facture)}" required></div>
           <div><label>No de facture</label><input name="numero" value="${h(f.numero)}"></div>
           <div><label>Avant taxes</label><input name="sousTotal" inputmode="decimal" value="${val(f.sous_total)}" required></div>
           <div><label>Total</label><input name="total" inputmode="decimal" value="${val(f.total)}"></div>
         </div>
-        <p class="doux">TPS ${fmt(f.tps)} · TVQ ${fmt(f.tvq)} (QuickBooks recalcule les taxes selon le code choisi)</p>
+        <p class="doux">TPS ${fmt(f.tps)} · TVQ ${fmt(f.tvq)} (TPS et TVQ du Québec appliquées par QuickBooks)</p>
         <div class="ecart" hidden></div>
         <div class="actions">
           <button>Approuver et envoyer</button>
