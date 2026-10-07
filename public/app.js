@@ -347,7 +347,10 @@ function trouverFournisseur(nom) {
 
 function carteApprobation(f) {
   const fournisseur = trouverFournisseur(f.fournisseur);
-  const compteHabituel = fournisseur ? listesQbo.comptesHabituels[fournisseur.id] : null;
+  // La catégorie lue sur la facture (carburant, matériaux…) passe avant l'habitude du fournisseur.
+  const compteCategorie = f.categorie ? listesQbo.comptesParCategorie?.[f.categorie] : null;
+  const compteHabituel = compteCategorie || (fournisseur ? listesQbo.comptesHabituels[fournisseur.id] : null);
+  const nomCategorie = f.categorie ? listesQbo.categories?.[f.categorie] : null;
   const taxeDefaut = listesQbo.codesTaxe.find((t) => /tvq|qst|qc/i.test(t.nom)) || listesQbo.codesTaxe[0];
   const options = (liste, choisi) => liste.map((x) => `<option value="${h(x.id)}" ${x.id === choisi ? 'selected' : ''}>${h(x.nom)}</option>`).join('');
 
@@ -364,7 +367,7 @@ function carteApprobation(f) {
           ${options(listesQbo.fournisseurs, fournisseur?.id)}
           <option value="__nouveau">+ Créer « ${h(f.fournisseur)} »</option>
         </select>
-        <label>Catégorie de dépense</label>
+        <label>Catégorie de dépense${nomCategorie ? ` <span class="doux">(lue sur la facture : ${h(nomCategorie)}${compteCategorie ? '' : ', aucun compte correspondant dans QuickBooks'})</span>` : ''}</label>
         <select name="compteId" required>
           <option value="">— Choisir —</option>${options(listesQbo.comptes, compteHabituel)}
         </select>

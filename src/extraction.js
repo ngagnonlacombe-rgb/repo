@@ -5,7 +5,7 @@ import Anthropic from '@anthropic-ai/sdk';
 const SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['est_une_facture', 'fournisseur', 'numero', 'date_facture', 'sous_total', 'tps', 'tvq', 'total'],
+  required: ['est_une_facture', 'fournisseur', 'numero', 'date_facture', 'sous_total', 'tps', 'tvq', 'total', 'categorie'],
   properties: {
     est_une_facture: { type: 'boolean', description: "false si l'image n'est pas une facture ou un reçu lisible" },
     fournisseur: { type: ['string', 'null'], description: 'Nom commercial du fournisseur (ex. RONA, BMR, Home Depot)' },
@@ -15,6 +15,12 @@ const SCHEMA = {
     tps: { type: ['number', 'null'], description: 'TPS (5 %) ou TVH, en dollars' },
     tvq: { type: ['number', 'null'], description: 'TVQ (9,975 %), en dollars' },
     total: { type: ['number', 'null'], description: 'Montant total payé, taxes incluses, en dollars' },
+    categorie: {
+      type: 'string',
+      enum: ['carburant', 'materiaux', 'outillage', 'disposition_dechets', 'autre'],
+      description: "Nature de l'achat : carburant (essence, diesel), materiaux (bois, quincaillerie, fournitures de chantier), "
+        + 'outillage (outils, lames, petit équipement), disposition_dechets (conteneur, écocentre, site de dépôt), sinon autre',
+    },
   },
 };
 
