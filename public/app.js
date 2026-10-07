@@ -553,7 +553,8 @@ async function ongletDossier(contenu, p, dossier, moi) {
   contenu.innerHTML = `
     ${p.actif ? `<input type="file" id="fichier-dossier" ${photos ? 'accept="image/*" multiple'
       : 'accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,image/*" multiple'} hidden>
-    <button class="pleine" type="button" id="btn-deposer">${photos ? 'Ajouter des photos' : 'Ajouter des documents'}</button>
+    ${photos ? '' : '<button class="pleine" type="button" id="btn-scanner">Scanner un document</button><div style="height:8px"></div>'}
+    <button class="pleine ${photos ? '' : 'secondaire'}" type="button" id="btn-deposer">${photos ? 'Ajouter des photos' : 'Ajouter des fichiers'}</button>
     <p class="doux" style="text-align:center">${photos ? 'Les photos envoyées dans la discussion apparaissent aussi ici.'
       : 'PDF, Word, Excel, texte ou image, 25 Mo maximum par fichier.'}</p>` : ''}
     <div id="liste-dossier"><p class="vide">Chargement…</p></div>`;
@@ -601,16 +602,112 @@ async function ongletDossier(contenu, p, dossier, moi) {
     champ.value = '';
   });
 
-  contenu.addEventListener('click', (e) => {
+  document.getElementById('btn-scanner')?.addEventListener('click', () => ecranScanner(contenu, p));
+
+  // onclick plutôt qu'un écouteur ajouté : l'onglet peut être réaffiché après le scanner.
+  contenu.onclick = (e) => {
     const b = e.target.closest('[data-effacer]');
     if (!b || !confirm('Effacer ce fichier ?')) return;
     occuper(b, async () => {
       await api(`/api/projets/${p.id}/fichiers/${b.dataset.effacer}`, { method: 'DELETE' });
       await afficher();
     });
-  });
+  };
 
   await afficher();
+}
+
+// Prépare une page scannée : redimensionnée, et en noir et blanc contrasté pour qu'elle soit lisible une fois imprimée.
+async function preparerPage(fichier, noirEtBlanc) {
+  const image = await createImageBitmap(fichier);
+  const echelle = Math.min(1, 1800 / Math.max(image.width, image.height));
+  const toile = document.createElement('canvas');
+  toile.width = Math.round(image.width * echelle);
+  toile.height = Math.round(image.height * echelle);
+  const g = toile.getContext('2d');
+  g.drawImage(image, 0, 0, toile.width, toile.height);
+  if (noirEtBlanc) {
+    const pixels = g.getImageData(0, 0, toile.width, toile.height);
+    const d = pixels.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const gris = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      // Le papier tire vers le blanc et l'encre vers le noir.
+      const v = Math.max(0, Math.min(255, (gris - 128) * 1.8 + 165));
+      d[i] = d[i + 1] = d[i + 2] = v;
+    }
+    g.putImageData(pixels, 0, 0);
+  }
+  return new Promise((ok) => toile.toBlob(ok, 'image/jpeg', 0.8));
+}
+
+function ecranScanner(contenu, p) {
+  const pages = [];
+  const date = new Date().toLocaleDateString('fr-CA');
+  contenu.innerHTML = `
+    <div class="carte">
+      <h2 style="margin-top:0">Scanner un document</h2>
+      <p class="doux">Pose la feuille à plat dans un endroit éclairé et prends-la en photo d'aussi près que possible.
+        Ajoute autant de pages que nécessaire.</p>
+      <input type="file" id="page-scan" accept="image/*" capture="environment" hidden>
+      <button class="pleine" type="button" id="btn-page">Prendre la page 1 en photo</button>
+      <div class="galerie" id="pages-scan" style="margin-top:12px"></div>
+      <label for="nom-scan">Nom du document</label>
+      <input id="nom-scan" placeholder="Ex. : Permis de construction" value="Document scanné ${date}">
+      <label style="display:flex;gap:8px;align-items:center;color:var(--texte)">
+        <input type="checkbox" id="nb-scan" checked style="width:auto;min-height:0"> Noir et blanc (plus lisible)
+      </label>
+      <div class="actions">
+        <button type="button" id="btn-creer-pdf" disabled>Créer le PDF</button>
+        <button class="secondaire" type="button" id="btn-annuler-scan">Annuler</button>
+      </div>
+    </div>`;
+
+  const champ = document.getElementById('page-scan');
+  const boutonPage = document.getElementById('btn-page');
+  const apercus = document.getElementById('pages-scan');
+  const creer = document.getElementById('btn-creer-pdf');
+  const rafraichir = () => {
+    apercus.innerHTML = pages.map((pg, i) => `
+      <figure><img src="${pg.url}" alt="Page ${i + 1}">
+        <figcaption class="doux">Page ${i + 1} <button class="lien" type="button" data-retirer="${i}">Retirer</button></figcaption>
+      </figure>`).join('');
+    boutonPage.textContent = `Prendre la page ${pages.length + 1} en photo`;
+    creer.disabled = !pages.length;
+    creer.textContent = pages.length > 1 ? `Créer le PDF (${pages.length} pages)` : 'Créer le PDF';
+  };
+
+  boutonPage.addEventListener('click', () => champ.click());
+  champ.addEventListener('change', () => {
+    const fichier = champ.files[0];
+    champ.value = '';
+    if (!fichier) return;
+    occuper(boutonPage, async () => {
+      boutonPage.textContent = 'Préparation de la page…';
+      const blob = await preparerPage(fichier, document.getElementById('nb-scan').checked);
+      pages.push({ blob, url: URL.createObjectURL(blob) });
+    }).then(rafraichir);
+  });
+  apercus.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-retirer]');
+    if (!b) return;
+    URL.revokeObjectURL(pages[b.dataset.retirer].url);
+    pages.splice(Number(b.dataset.retirer), 1);
+    rafraichir();
+  });
+  document.getElementById('btn-annuler-scan').addEventListener('click', () => {
+    if (pages.length && !confirm('Abandonner les pages prises ?')) return;
+    ongletDossier(contenu, p, 'documents', etat.utilisateur);
+  });
+  creer.addEventListener('click', () => occuper(creer, async () => {
+    creer.textContent = 'Création du PDF…';
+    const donnees = new FormData();
+    donnees.append('nom', document.getElementById('nom-scan').value);
+    pages.forEach((pg, i) => donnees.append('pages', pg.blob, `page-${i + 1}.jpg`));
+    await api(`/api/projets/${p.id}/scanner`, { method: 'POST', body: donnees });
+    pages.forEach((pg) => URL.revokeObjectURL(pg.url));
+    avis('Document scanné ajouté.');
+    ongletDossier(contenu, p, 'documents', etat.utilisateur);
+  }));
 }
 
 function ongletDiscussion(contenu, p, messages, ancre) {

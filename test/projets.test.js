@@ -9,6 +9,8 @@ import { creerApp } from '../src/app.js';
 import { creerQuickBooksDemo } from '../src/quickbooks.js';
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+// Plus petit JPEG valide (1 × 1 pixel, niveaux de gris).
+const JPEG = Buffer.from('/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=', 'base64');
 let serveur, base, dossier;
 
 before(async () => {
@@ -140,4 +142,27 @@ test('un projet archivé disparaît pour les employés et reste visible au burea
   assert.equal((await marc(`/api/projets/${idProjet}`)).status, 404);
   assert.equal((await marc(`/api/projets/${idProjet}/dossiers/documents`)).status, 404);
   assert.equal((await bureau('/api/projets?archives=1')).corps.projets.length, 1);
+});
+
+test('scanner : les pages photographiées deviennent un PDF dans Documents', async () => {
+  // Le projet a été archivé au test précédent : on le réactive.
+  await bureau(`/api/projets/${idProjet}`, { method: 'PATCH', json: { actif: true } });
+  const form = new FormData();
+  form.append('nom', 'Permis de construction');
+  for (let i = 0; i < 2; i += 1) form.append('pages', new Blob([JPEG], { type: 'image/jpeg' }), `page${i}.jpg`);
+  const r = await marc(`/api/projets/${idProjet}/scanner`, { method: 'POST', body: form });
+  assert.equal(r.status, 201);
+  assert.equal(r.corps.fichier.nom_original, 'Permis de construction.pdf');
+  assert.equal(r.corps.fichier.pages, 2);
+
+  const pdf = Buffer.from((await marc(`/api/projets/${idProjet}/fichiers/${r.corps.fichier.id}`)).corps).toString('latin1');
+  assert.match(pdf, /^%PDF-1\.4/);
+  assert.match(pdf, /\/Count 2/);
+  // Chaque entrée de la table xref pointe bien sur son objet.
+  const debut = Number(pdf.match(/startxref\n(\d+)/)[1]);
+  const entrees = pdf.slice(debut).split('\n').slice(3).filter((l) => / n $/.test(l));
+  entrees.forEach((l, i) => assert.ok(pdf.startsWith(`${i + 1} 0 obj`, Number(l.slice(0, 10)))));
+
+  const vide = await marc(`/api/projets/${idProjet}/scanner`, { method: 'POST', body: new FormData() });
+  assert.equal(vide.status, 400);
 });

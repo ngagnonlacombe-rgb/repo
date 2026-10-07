@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { exigerConnexion, exigerBureau } from './auth.js';
+import { pdfDePages } from './pdf.js';
 
 const PHOTOS = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/heic': 'heic' };
 
@@ -158,6 +159,33 @@ export function brancherProjets(app, { db, dossierFichiers }) {
       .run(p.id, req.utilisateur.id, req.params.dossier, fichier, nom, req.file.mimetype, req.file.size);
     db.prepare("UPDATE projets SET maj_le = datetime('now') WHERE id = ?").run(p.id);
     res.status(201).json({ fichier: { id: Number(lastInsertRowid), nom_original: nom } });
+  });
+
+  // Scanner : le téléphone envoie les pages photographiées (JPEG), le serveur en fait un PDF du dossier Documents.
+  const scan = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 8 * 1024 * 1024, files: 30 },
+    fileFilter: (_req, f, cb) => cb(null, f.mimetype === 'image/jpeg'),
+  });
+  app.post('/api/projets/:id/scanner', exigerConnexion, scan.array('pages', 30), (req, res) => {
+    const p = projet(Number(req.params.id));
+    if (!visible(p, req.utilisateur) || !p.actif) return res.status(404).json({ erreur: 'Projet introuvable.' });
+    if (!req.files?.length) return res.status(400).json({ erreur: 'Prends au moins une page en photo.' });
+    let pdf;
+    try {
+      pdf = pdfDePages(req.files.map((f) => f.buffer));
+    } catch (e) {
+      return res.status(400).json({ erreur: e.message });
+    }
+    const date = new Date().toISOString().slice(0, 10);
+    const nom = `${(texte(req.body?.nom, 150) || `Document scanné ${date}`).replace(/[\\/:*?"<>|]/g, '-').replace(/\.pdf$/i, '')}.pdf`;
+    const fichier = `${crypto.randomUUID()}.pdf`;
+    fs.writeFileSync(path.join(dossier, fichier), pdf);
+    const { lastInsertRowid } = db.prepare(`INSERT INTO projet_fichiers
+      (projet_id, auteur_id, dossier, fichier, nom_original, type_mime, taille) VALUES (?, ?, 'documents', ?, ?, 'application/pdf', ?)`)
+      .run(p.id, req.utilisateur.id, fichier, nom, pdf.length);
+    db.prepare("UPDATE projets SET maj_le = datetime('now') WHERE id = ?").run(p.id);
+    res.status(201).json({ fichier: { id: Number(lastInsertRowid), nom_original: nom, pages: req.files.length } });
   });
 
   app.get('/api/projets/:id/fichiers/:fid', exigerConnexion, (req, res) => {
