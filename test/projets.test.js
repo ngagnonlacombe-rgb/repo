@@ -118,11 +118,16 @@ test('dossiers Photos et Documents : dépôt, liste, téléchargement, types ref
   assert.deepEqual(photos.map((f) => f.source).sort(), ['discussion', 'dossier']);
   for (const f of photos) assert.equal((await julie(f.url)).status, 200);
 
-  const docs = (await marc(`/api/projets/${idProjet}/dossiers/documents`)).corps.fichiers;
+  // Documents : chacun voit les siens ; le bureau et les chargés de projet voient tout.
+  assert.deepEqual((await marc(`/api/projets/${idProjet}/dossiers/documents`)).corps.fichiers, []);
+  assert.equal((await julie(`/api/projets/${idProjet}/dossiers/documents`)).corps.fichiers.length, 2);
+  const docs = (await bureau(`/api/projets/${idProjet}/dossiers/documents`)).corps.fichiers;
   assert.deepEqual(docs.map((f) => f.nom_original).sort(), ['devis.csv', 'plan-étage.pdf']);
-  const telechargement = await fetch(base + docs.find((f) => f.nom_original === 'devis.csv').url, {
+  const urlDevis = docs.find((f) => f.nom_original === 'devis.csv').url;
+  assert.equal((await marc(urlDevis)).status, 404);
+  const telechargement = await fetch(base + urlDevis, {
     headers: { cookie: (await (async () => {
-      const r = await fetch(`${base}/api/connexion`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identifiant: 'marc', motDePasse: '4821' }) });
+      const r = await fetch(`${base}/api/connexion`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identifiant: 'julie', motDePasse: '4821' }) });
       return r.headers.get('set-cookie').split(';')[0];
     })()) },
   });
@@ -131,9 +136,9 @@ test('dossiers Photos et Documents : dépôt, liste, téléchargement, types ref
   const idPlan = d.corps.fichier.id;
   assert.equal((await marc(`/api/projets/${idProjet}/fichiers/${idPlan}`, { method: 'DELETE' })).status, 404);
   assert.equal((await bureau(`/api/projets/${idProjet}/fichiers/${idPlan}`, { method: 'DELETE' })).status, 204);
-  assert.equal((await marc(`/api/projets/${idProjet}/dossiers/documents`)).corps.fichiers.length, 1);
-  const liste = (await marc('/api/projets')).corps.projets[0];
-  assert.deepEqual([liste.nb_photos, liste.nb_documents], [2, 1]);
+  assert.equal((await julie(`/api/projets/${idProjet}/dossiers/documents`)).corps.fichiers.length, 1);
+  assert.deepEqual((({ nb_photos, nb_documents }) => [nb_photos, nb_documents])((await julie('/api/projets')).corps.projets[0]), [2, 1]);
+  assert.deepEqual((({ nb_photos, nb_documents }) => [nb_photos, nb_documents])((await marc('/api/projets')).corps.projets[0]), [2, 0]);
 });
 
 test('un projet archivé disparaît pour les employés et reste visible au bureau', async () => {
@@ -238,4 +243,25 @@ test('lien du plan magicplan : posé par le bureau ou un chargé de projet, visi
   await bureau(`/api/bureau/utilisateurs/${idJulie}`, { method: 'PATCH', json: { chef_projet: true } });
   assert.equal((await julie(`/api/projets/${idProjet}`, { method: 'PATCH', json: { magicplan_url: '' } })).status, 200);
   assert.equal((await ouvrir()).magicplan_url, null);
+});
+
+test('un chargé de projet voit tous les documents, un employé seulement les siens', async () => {
+  const { utilisateurs } = (await bureau('/api/bureau/utilisateurs')).corps;
+  const idMarc = utilisateurs.find((u) => u.identifiant === 'marc').id;
+  const r = await bureau('/api/projets', { method: 'POST', json: { nom: 'Sous-sol Gagnon' } });
+  const id = r.corps.projet.id;
+  const depot = (qui, nom) => {
+    const f = new FormData();
+    f.append('fichier', new Blob(['%PDF-1.4'], { type: 'application/pdf' }), nom);
+    return qui(`/api/projets/${id}/dossiers/documents`, { method: 'POST', body: f });
+  };
+  assert.equal((await depot(marc, 'facture-marc.pdf')).status, 201);
+  assert.equal((await depot(bureau, 'soumission.pdf')).status, 201);
+  const noms = async (qui) => (await qui(`/api/projets/${id}/dossiers/documents`)).corps.fichiers.map((f) => f.nom_original).sort();
+  assert.deepEqual(await noms(marc), ['facture-marc.pdf']);
+  assert.deepEqual(await noms(bureau), ['facture-marc.pdf', 'soumission.pdf']);
+
+  await bureau(`/api/bureau/utilisateurs/${idMarc}`, { method: 'PATCH', json: { chef_projet: true } });
+  assert.deepEqual(await noms(marc), ['facture-marc.pdf', 'soumission.pdf']);
+  await bureau(`/api/bureau/utilisateurs/${idMarc}`, { method: 'PATCH', json: { chef_projet: false } });
 });
