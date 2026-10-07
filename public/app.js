@@ -1220,7 +1220,6 @@ async function vuePunch() {
     </div>
     <input id="note-quart" placeholder="${enCours ? 'Note de fin de quart (facultatif)' : 'Chantier ou note (facultatif)'}" maxlength="500">
     <button class="geant ${enCours ? 'danger' : 'succes'}" type="button" id="btn-punch">${enCours ? 'Terminer mon quart' : 'Commencer mon quart'}</button>
-    <p class="doux">📍 Ta position est enregistrée seulement au moment où tu commences et termines ton quart, pas pendant.</p>
     <h2>Mes banques</h2>
     ${tuilesSoldes(mesHeures.soldes)}
     <h2>Cette semaine : ${heuresDec(mesHeures.semaines.find((sem) => sem.lundi === jourQc(debutSemaine.toISOString()))?.heures || 0)}</h2>
