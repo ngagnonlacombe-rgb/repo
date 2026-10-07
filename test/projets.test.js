@@ -203,3 +203,20 @@ test('sous-dossiers de photos : création et renommage par les employés, rangem
   assert.equal((await marc(`/api/projets/${idProjet}/dossiers/photos?album=0`)).corps.fichiers.length, 2);
   assert.equal((await marc(url, { method: 'PATCH', json: {} })).status, 404);
 });
+
+test('un chargé de projet désigné par le bureau peut créer des projets', async () => {
+  const { utilisateurs } = (await bureau('/api/bureau/utilisateurs')).corps;
+  const idJulie = utilisateurs.find((u) => u.identifiant === 'julie').id;
+  assert.equal((await julie('/api/projets', { method: 'POST', json: { nom: 'Agrandissement Roy' } })).status, 403);
+  assert.equal((await marc(`/api/bureau/utilisateurs/${idJulie}`, { method: 'PATCH', json: { chef_projet: true } })).status, 403);
+
+  assert.equal((await bureau(`/api/bureau/utilisateurs/${idJulie}`, { method: 'PATCH', json: { chef_projet: true } })).status, 200);
+  assert.equal((await julie('/api/etat')).corps.utilisateur.chef_projet, 1);
+  const r = await julie('/api/projets', { method: 'POST', json: { nom: 'Agrandissement Roy', adresse: '8 rang Saint-Paul' } });
+  assert.equal(r.status, 201);
+  assert.ok((await marc('/api/projets')).corps.projets.some((p) => p.nom === 'Agrandissement Roy'));
+  assert.equal((await julie(`/api/projets/${r.corps.projet.id}`, { method: 'PATCH', json: { actif: false } })).status, 403);
+
+  await bureau(`/api/bureau/utilisateurs/${idJulie}`, { method: 'PATCH', json: { chef_projet: false } });
+  assert.equal((await julie('/api/projets', { method: 'POST', json: { nom: 'Autre' } })).status, 403);
+});

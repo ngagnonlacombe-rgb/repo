@@ -3,7 +3,7 @@ import multer from 'multer';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { exigerConnexion, exigerBureau } from './auth.js';
+import { exigerConnexion } from './auth.js';
 import { pdfDePages } from './pdf.js';
 
 const PHOTOS = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/heic': 'heic' };
@@ -60,7 +60,11 @@ export function brancherProjets(app, { db, dossierFichiers }) {
     res.json({ projets });
   });
 
-  app.post('/api/projets', exigerConnexion, exigerBureau, (req, res) => {
+  // Le bureau et les chargés de projet créent les projets.
+  app.post('/api/projets', exigerConnexion, (req, res) => {
+    if (req.utilisateur.role !== 'bureau' && !req.utilisateur.chef_projet) {
+      return res.status(403).json({ erreur: 'Seuls le bureau et les chargés de projet peuvent créer un projet.' });
+    }
     const nom = texte(req.body?.nom, 120);
     if (!nom) return res.status(400).json({ erreur: 'Donne un nom au projet.' });
     const { lastInsertRowid } = db.prepare('INSERT INTO projets (nom, adresse, cree_par) VALUES (?, ?, ?)')

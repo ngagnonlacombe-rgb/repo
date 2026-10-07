@@ -160,6 +160,10 @@ export function ouvrirBase(fichier) {
   if (!db.prepare('PRAGMA table_info(utilisateurs)').all().some((c) => c.name === 'taux_vacances')) {
     db.exec('ALTER TABLE utilisateurs ADD COLUMN taux_vacances REAL');
   }
+  // Chargé de projet : un employé qui peut créer des projets.
+  if (!db.prepare('PRAGMA table_info(utilisateurs)').all().some((c) => c.name === 'chef_projet')) {
+    db.exec('ALTER TABLE utilisateurs ADD COLUMN chef_projet INTEGER NOT NULL DEFAULT 0');
+  }
   // Bases déjà en service : une photo (déposée ou envoyée dans la discussion) peut être rangée dans un sous-dossier.
   for (const table of ['projet_fichiers', 'projet_messages']) {
     const colonnes = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);

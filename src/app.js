@@ -97,7 +97,7 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
     }
     limiteur.reussite(identifiant);
     poserCookie(res, creerSession(db, u.id), production);
-    res.json({ utilisateur: { id: u.id, nom: u.nom, identifiant: u.identifiant, role: u.role } });
+    res.json({ utilisateur: { id: u.id, nom: u.nom, identifiant: u.identifiant, role: u.role, chef_projet: u.chef_projet } });
   });
 
   app.post('/api/deconnexion', (req, res) => {
@@ -275,7 +275,7 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
 
   // ---------- Bureau : employés ----------
   app.get('/api/bureau/utilisateurs', exigerConnexion, exigerBureau, (_req, res) => {
-    res.json({ utilisateurs: db.prepare('SELECT id, nom, identifiant, role, actif FROM utilisateurs ORDER BY actif DESC, nom').all() });
+    res.json({ utilisateurs: db.prepare('SELECT id, nom, identifiant, role, actif, chef_projet FROM utilisateurs ORDER BY actif DESC, nom').all() });
   });
 
   app.post('/api/bureau/utilisateurs', exigerConnexion, exigerBureau, (req, res) => {
@@ -293,7 +293,7 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
   app.patch('/api/bureau/utilisateurs/:id', exigerConnexion, exigerBureau, (req, res) => {
     const u = db.prepare('SELECT * FROM utilisateurs WHERE id = ?').get(Number(req.params.id));
     if (!u) return res.status(404).json({ erreur: 'Utilisateur introuvable.' });
-    const { actif, motDePasse } = req.body || {};
+    const { actif, motDePasse, chef_projet: chefProjet } = req.body || {};
     if (u.id === req.utilisateur.id && actif === false) {
       return res.status(400).json({ erreur: 'Tu ne peux pas désactiver ton propre accès.' });
     }
@@ -306,6 +306,9 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
     if (typeof actif === 'boolean') {
       db.prepare('UPDATE utilisateurs SET actif = ? WHERE id = ?').run(actif ? 1 : 0, u.id);
       if (!actif) db.prepare('DELETE FROM sessions WHERE utilisateur_id = ?').run(u.id);
+    }
+    if (typeof chefProjet === 'boolean') {
+      db.prepare('UPDATE utilisateurs SET chef_projet = ? WHERE id = ?').run(chefProjet ? 1 : 0, u.id);
     }
     res.json({ ok: true });
   });
