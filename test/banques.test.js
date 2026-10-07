@@ -58,7 +58,7 @@ test('semaines à l\'heure du Québec et soldes calculés', async () => {
   // 30 min de dîner retirées par journée de 5 h et plus : 45 − 2,5 = 42,5 ; 38 − 1,5 = 36,5 (le quart de 4 h du dimanche n'en a pas).
   assert.deepEqual(semaines(db, idMarc).map((s) => [s.lundi, s.heures]), [['2026-09-28', 42.5], ['2026-09-21', 36.5]]);
   // Banque : 2,5 h au-delà de 40 h × 1,5 ; vacances : 4 % de 79 h payées ; maladie : 16 h par année.
-  assert.deepEqual(soldes(db, idMarc), { banque: 3.75, vacances: 3.16, maladie: 16, tauxVacances: 4 });
+  assert.deepEqual(soldes(db, idMarc), { banque: 3.75, vacances: 3.16, maladie: 16, absence: 0, conge_perso: 0, ferie: 0, maladie_np: 0, tauxVacances: 4 });
 
   const r = (await marc('/api/mes-heures')).corps;
   assert.deepEqual(r.semaines.map((s) => [s.lundi, s.heures, s.banque]), [['2026-09-28', 42.5, 3.75], ['2026-09-21', 36.5, 0]]);
@@ -77,14 +77,14 @@ test('le bureau inscrit les congés pris et les soldes de départ ; règles et t
   assert.equal((await inscrire({ type: 'banque', heures: -3.5, date: `${annee}-10-02` })).status, 201);
   assert.equal((await inscrire({ type: 'maladie', heures: -8, date: `${annee}-02-10` })).status, 201);
   const ancienne = await inscrire({ type: 'maladie', heures: -8, date: `${annee - 1}-12-10` }); // l'an passé : ne compte plus
-  assert.deepEqual(ancienne.corps.soldes, { banque: 0.25, vacances: 27.16, maladie: 8, tauxVacances: 4 });
+  assert.deepEqual(ancienne.corps.soldes, { banque: 0.25, vacances: 27.16, maladie: 8, absence: 0, conge_perso: 0, ferie: 0, maladie_np: 0, tauxVacances: 4 });
 
   // Taux de vacances de 6 % pour Marc, puis règles changées pour tous.
   assert.equal((await bureau(`/api/bureau/soldes/${idMarc}`, { method: 'PATCH', json: { taux_vacances: 6 } })).corps.soldes.vacances, 28.74);
   assert.equal((await bureau('/api/bureau/regles-heures', { method: 'PUT', json: { semaine: 44, multiplicateurBanque: 1, tauxVacances: 4, maladieAnnuelle: 16 } })).status, 200);
   assert.equal((await bureau('/api/bureau/regles-heures', { method: 'PUT', json: { semaine: 0 } })).status, 400);
   const { employes } = (await bureau('/api/bureau/soldes')).corps;
-  assert.deepEqual(employes[0].soldes, { banque: -3.5, vacances: 28.74, maladie: 8, tauxVacances: 6 });
+  assert.deepEqual(employes[0].soldes, { banque: -3.5, vacances: 28.74, maladie: 8, absence: 0, conge_perso: 0, ferie: 0, maladie_np: 0, tauxVacances: 6 });
 
   // L'employé voit ses soldes et ses congés pris ; le bureau peut annuler une inscription.
   const vu = (await marc('/api/mes-heures')).corps;
@@ -124,4 +124,28 @@ test('dîner : 30 min retirées par jour, payées en un clic quand l\'employé n
   // Règle du dîner modifiable : sans dîner retiré, la semaine compte 45 h.
   await bureau('/api/bureau/regles-heures', { method: 'PUT', json: { semaine: 40, multiplicateurBanque: 1.5, tauxVacances: 4, maladieAnnuelle: 16, dinerMinutes: 0, dinerSeuil: 5 } });
   assert.equal(semaines(db, idMarc)[0].heures, 45);
+});
+
+test('mêmes catégories qu\'Agendrix ; une base existante accepte les nouvelles banques', async () => {
+  const fichier = path.join(dossier, 'ancienne.db');
+  const vieille = ouvrirBase(fichier);
+  vieille.exec(`DROP TABLE heures_mouvements;
+    CREATE TABLE heures_mouvements (id INTEGER PRIMARY KEY, employe_id INTEGER NOT NULL REFERENCES utilisateurs(id) ON DELETE CASCADE,
+      type TEXT NOT NULL CHECK (type IN ('banque', 'vacances', 'maladie')), heures REAL NOT NULL, date TEXT NOT NULL, note TEXT,
+      cree_par INTEGER REFERENCES utilisateurs(id), cree_le TEXT NOT NULL DEFAULT (datetime('now')));
+    INSERT INTO utilisateurs (nom, identifiant, hash, role) VALUES ('Michael', 'michael', 'x', 'employe');
+    INSERT INTO heures_mouvements (employe_id, type, heures, date) VALUES (1, 'banque', 19.47, '2026-10-07');`);
+  vieille.close();
+  const base = ouvrirBase(fichier);
+  base.prepare("INSERT INTO heures_mouvements (employe_id, type, heures, date) VALUES (1, 'ferie', -26.98, '2026-10-07')").run();
+  base.prepare("INSERT INTO heures_mouvements (employe_id, type, heures, date) VALUES (1, 'maladie_np', -8, '2026-10-07')").run();
+  const s = soldes(base, 1);
+  assert.deepEqual([s.banque, s.ferie, s.maladie_np, s.absence, s.conge_perso], [19.47, -26.98, -8, 0, 0]);
+  base.close();
+
+  const inscrire = (json) => bureau('/api/bureau/mouvements', { method: 'POST', json: { employe_id: idMarc, ...json } });
+  const r = await inscrire({ type: 'conge_perso', heures: -7.5, date: '2026-10-01' });
+  assert.equal(r.status, 201);
+  assert.equal(r.corps.soldes.conge_perso, -7.5);
+  assert.equal((await inscrire({ type: 'inventee', heures: 1, date: '2026-10-01' })).status, 400);
 });

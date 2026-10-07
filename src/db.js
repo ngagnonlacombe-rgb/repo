@@ -134,7 +134,7 @@ export function ouvrirBase(fichier) {
     CREATE TABLE IF NOT EXISTS heures_mouvements (
       id INTEGER PRIMARY KEY,
       employe_id INTEGER NOT NULL REFERENCES utilisateurs(id) ON DELETE CASCADE,
-      type TEXT NOT NULL CHECK (type IN ('banque', 'vacances', 'maladie')),
+      type TEXT NOT NULL, -- banque, vacances, maladie, absence, conge_perso, ferie, maladie_np (validé dans banques.js)
       heures REAL NOT NULL,
       date TEXT NOT NULL,
       note TEXT,
@@ -159,6 +159,29 @@ export function ouvrirBase(fichier) {
   // Taux de vacances propre à un employé (ex. 6 % après 3 ans) ; NULL = taux par défaut des règles.
   if (!db.prepare('PRAGMA table_info(utilisateurs)').all().some((c) => c.name === 'taux_vacances')) {
     db.exec('ALTER TABLE utilisateurs ADD COLUMN taux_vacances REAL');
+  }
+  // Bases déjà en service : la table des mouvements limitait les banques à trois ; on retire cette limite
+  // pour accueillir les mêmes catégories qu'Agendrix (absence, congé personnel, férié, maladie non payée).
+  const tableMvt = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'heures_mouvements'").get();
+  if (tableMvt?.sql.includes('CHECK (type IN')) {
+    db.exec(`
+      BEGIN;
+      ALTER TABLE heures_mouvements RENAME TO heures_mouvements_ancienne;
+      CREATE TABLE heures_mouvements (
+        id INTEGER PRIMARY KEY,
+        employe_id INTEGER NOT NULL REFERENCES utilisateurs(id) ON DELETE CASCADE,
+        type TEXT NOT NULL,
+        heures REAL NOT NULL,
+        date TEXT NOT NULL,
+        note TEXT,
+        cree_par INTEGER REFERENCES utilisateurs(id),
+        cree_le TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO heures_mouvements SELECT * FROM heures_mouvements_ancienne;
+      DROP TABLE heures_mouvements_ancienne;
+      CREATE INDEX IF NOT EXISTS heures_mouvements_employe ON heures_mouvements (employe_id, date);
+      COMMIT;
+    `);
   }
   // Chargé de projet : un employé qui peut créer des projets.
   if (!db.prepare('PRAGMA table_info(utilisateurs)').all().some((c) => c.name === 'chef_projet')) {

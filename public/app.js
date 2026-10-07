@@ -1184,8 +1184,13 @@ function lundi(d) {
 // Jour « AAAA-MM-JJ » à l'heure du Québec, comme le serveur le calcule.
 const jourQc = (t) => new Date(t.includes('T') ? t : `${t.replace(' ', 'T')}Z`).toLocaleDateString('en-CA', { timeZone: 'America/Toronto' });
 // Heures décimales (7.5) affichées « 7 h 30 », avec le signe si négatif.
-const heuresDec = (n) => `${n < 0 ? '−' : ''}${duree(Math.abs(n) * 3600000)}`;
-const NOMS_BANQUES = { banque: 'Banque d\'heures', vacances: 'Vacances', maladie: 'Maladie' };
+// Arrondi à la minute : 26,98 h s'affiche 26 h 59 (les heures sont gardées au centième).
+const heuresDec = (n) => `${n < 0 ? '−' : ''}${duree(Math.round(Math.abs(n) * 60) * 60000)}`;
+// Mêmes noms et même ordre qu'Agendrix.
+const NOMS_BANQUES = {
+  banque: 'Temps accumulé', absence: 'Absence', conge_perso: 'Congé personnel', ferie: 'Férié',
+  maladie: 'Maladie', maladie_np: 'Maladie (non payé)', vacances: 'Vacances',
+};
 const tuilesSoldes = (s) => `<div class="soldes">${Object.entries(NOMS_BANQUES).map(([cle, nom]) => `
   <div class="solde ${s[cle] < 0 ? 'negatif' : ''}"><span class="doux">${nom}</span><strong>${heuresDec(s[cle])}</strong></div>`).join('')}</div>`;
 
@@ -1282,7 +1287,7 @@ async function vueHeures(semaineChoisie) {
       const journees = jours.filter((j) => j.employe_id === e.id).sort((a, b) => a.jour.localeCompare(b.jour));
       return `<details class="carte heures-employe" data-employe="${e.id}" ${heuresOuvertes.has(e.id) ? 'open' : ''}>
         <summary><strong>${h(e.nom)}</strong><span>${heuresDec(journees.reduce((t, j) => t + j.payees, 0))}</span>
-        ${soldesDe(e.id) ? `<div class="doux soldes-ligne">Banque ${heuresDec(soldesDe(e.id).banque)} · Vacances ${heuresDec(soldesDe(e.id).vacances)} · Maladie ${heuresDec(soldesDe(e.id).maladie)}
+        ${soldesDe(e.id) ? `<div class="doux soldes-ligne">Temps accumulé ${heuresDec(soldesDe(e.id).banque)} · Vacances ${heuresDec(soldesDe(e.id).vacances)} · Maladie ${heuresDec(soldesDe(e.id).maladie)}
           · <a href="#banques/${e.id}">Banques et congés</a></div>` : ''}</summary>
         ${journees.map((j) => `
           <div class="journee">
