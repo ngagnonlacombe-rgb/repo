@@ -339,7 +339,8 @@ function montant(v) {
 // Reçus d'essence et autres : seul le total taxes incluses est connu. On en tire l'avant-taxes, la TPS et la TVQ
 // du Québec ; la TVQ prend l'écart d'arrondi pour que la somme retombe exactement sur le total.
 export function completerTaxes(m) {
-  if (m.total == null || m.sous_total != null || m.tps != null || m.tvq != null) return m;
+  // La lecture automatique renvoie parfois des taxes à 0 sur un reçu d'essence : l'avant-taxes manquant suffit.
+  if (m.total == null || m.total <= 0 || m.sous_total != null) return m;
   const cents = Math.round(m.total * 100);
   const sousTotal = Math.round(cents / 1.14975);
   const tps = Math.round(sousTotal * 0.05);

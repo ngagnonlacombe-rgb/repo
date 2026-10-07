@@ -18,3 +18,10 @@ test('les montants déjà connus ne sont jamais écrasés', () => {
   const sansTotal = { sous_total: null, tps: null, tvq: null, total: null };
   assert.deepEqual(completerTaxes(sansTotal), sansTotal);
 });
+
+test('des taxes à 0 ou absentes ne bloquent pas le calcul', () => {
+  assert.deepEqual(completerTaxes({ sous_total: null, tps: 0, tvq: 0, total: 114.98 }),
+    { sous_total: 100, tps: 5, tvq: 9.98, total: 114.98 });
+  assert.deepEqual(completerTaxes({ sous_total: null, tps: 5, tvq: null, total: 114.98 }),
+    { sous_total: 100, tps: 5, tvq: 9.98, total: 114.98 });
+});
