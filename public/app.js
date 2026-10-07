@@ -246,6 +246,19 @@ async function vueEditionFacture(id) {
     </div>`;
 
   const form = document.getElementById('f-facture');
+  // Total taxes incluses seulement (essence, etc.) : on remplit l'avant-taxes, la TPS et la TVQ, tant que
+  // l'employé n'a pas saisi ces cases lui-même.
+  const casesTaxes = [form.sous_total, form.tps, form.tvq];
+  let calculAuto = casesTaxes.every((c) => !c.value);
+  casesTaxes.forEach((c) => c.addEventListener('input', () => { calculAuto = false; }));
+  form.total.addEventListener('input', () => {
+    if (!calculAuto) return;
+    const cents = Math.round(Number(form.total.value.replace(/\s|\$/g, '').replace(',', '.')) * 100);
+    if (!Number.isFinite(cents) || cents <= 0) { casesTaxes.forEach((c) => { c.value = ''; }); return; }
+    const st = Math.round(cents / 1.14975);
+    const tps = Math.round(st * 0.05);
+    [st, tps, cents - st - tps].forEach((v, i) => { casesTaxes[i].value = (v / 100).toFixed(2); });
+  });
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     occuper(form.querySelector('button'), async () => {

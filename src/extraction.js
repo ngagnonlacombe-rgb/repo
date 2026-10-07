@@ -21,7 +21,8 @@ const SCHEMA = {
 const CONSIGNE = `Tu lis une facture ou un reçu de fournisseur d'une entreprise du Québec.
 Extrais les champs demandés tels qu'ils apparaissent sur le document. Montants en dollars canadiens, sans symbole.
 Si un champ est illisible ou absent, mets null plutôt que de deviner.
-La TPS est parfois écrite GST ou TPS/GST ; la TVQ est parfois écrite QST ou TVQ/QST.`;
+La TPS est parfois écrite GST ou TPS/GST ; la TVQ est parfois écrite QST ou TVQ/QST.
+Si le reçu n'indique que le total taxes incluses (ex. reçu d'essence), mets null pour sous_total, tps et tvq : l'app les calcule.`;
 
 export function creerLecteur({ cleApi = process.env.ANTHROPIC_API_KEY, client } = {}) {
   if (!client && !cleApi) {

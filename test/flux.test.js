@@ -194,3 +194,12 @@ test('trop d\'essais de mot de passe bloque temporairement', async () => {
   const r = await c('/api/connexion', { method: 'POST', json: { identifiant: 'nicolas', motDePasse: 'un-bon-mot-de-passe' } });
   assert.equal(r.status, 429);
 });
+
+test("reçu d'essence : avec seulement le total, l'app calcule les taxes", async () => {
+  const form = new FormData();
+  form.append('fichier', new Blob([PNG], { type: 'image/png' }), 'essence.png');
+  const id = (await employe('/api/factures', { method: 'POST', body: form })).corps.facture.id;
+  const r = await employe(`/api/factures/${id}`, { method: 'PUT', json: { fournisseur: 'Ultramar', total: '80,00', soumettre: true } });
+  assert.equal(r.status, 200);
+  assert.deepEqual([r.corps.facture.sous_total, r.corps.facture.tps, r.corps.facture.tvq], [69.58, 3.48, 6.94]);
+});
