@@ -224,7 +224,7 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
         fournisseurId: fournisseur.id, compteId: String(b.compteId), codeTaxeId: String(b.codeTaxeId),
         date, numero: texte(b.numero, 40), sousTotal, total: montant(b.total),
         description: `${CATEGORIES[categorieLue(f)]?.nom || 'Achat'}, déposée par ${employe}`,
-        note: [`Déposée par ${employe} via l'app employés (facture #${f.id}).`, f.note].filter(Boolean).join(' '),
+        note: [`Déposée par ${employe} via l'app Vapro GUS (facture #${f.id}).`, f.note].filter(Boolean).join(' '),
       });
 
       // La facture existe dans QuickBooks : on la marque approuvée avant de joindre la photo,

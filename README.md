@@ -1,4 +1,4 @@
-# App employés
+# Vapro GUS
 
 App web pour cellulaire : les employés déposent leurs factures de matériaux (photo ou PDF), le bureau les approuve, et chaque facture approuvée devient une facture à payer dans QuickBooks Online, avec la photo jointe. Le punch Agendrix viendra à l'étape 3.
 

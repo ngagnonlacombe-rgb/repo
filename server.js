@@ -38,7 +38,7 @@ const app = creerApp({
 
 const port = Number(process.env.PORT) || 3000;
 app.listen(port, () => {
-  console.log(`App employés : http://localhost:${port}`);
+  console.log(`Vapro GUS : http://localhost:${port}`);
   console.log(`QuickBooks : ${qbo.mode === 'demo' ? 'mode démo (rien n\'est envoyé)' : qbo.mode}`);
   console.log(`Lecture automatique des factures : ${lecteur.actif ? 'active' : 'inactive (saisie manuelle)'}`);
 });
