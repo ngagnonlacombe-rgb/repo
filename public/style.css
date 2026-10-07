@@ -1,17 +1,17 @@
 :root {
   --fond: #f4f6f8; --carte: #fff; --texte: #1b2430; --doux: #5b6675; --bord: #d9dee5;
-  --accent: #c2410c; --accent-texte: #fff; --succes: #2e7d4f; --alerte: #a15c00; --danger: #b3261e;
+  --accent: #ff8a1f; --accent-texte: #1f1300; --accent-lien: #c25400; --succes: #2e7d4f; --alerte: #a15c00; --danger: #b3261e;
   --rayon: 12px;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --fond: #11161c; --carte: #1a222b; --texte: #e8edf2; --doux: #9aa7b5; --bord: #2c3742;
-    --accent: #fb923c; --accent-texte: #0b1520; --succes: #5cc28a; --alerte: #e0a24a; --danger: #ef7b72;
+    --accent: #ff9a3c; --accent-texte: #1f1300; --accent-lien: #ffaa5c; --succes: #5cc28a; --alerte: #e0a24a; --danger: #ef7b72;
   }
 }
 * { box-sizing: border-box; }
-a { color: var(--accent); }
+a { color: var(--accent-lien); }
 body {
   margin: 0; background: var(--fond); color: var(--texte);
   font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -41,7 +41,7 @@ button, .bouton {
   min-height: 44px; padding: 10px 18px; border-radius: 10px; border: 1px solid var(--accent);
   background: var(--accent); color: var(--accent-texte); cursor: pointer; text-decoration: none;
 }
-button.secondaire { background: transparent; color: var(--accent); }
+button.secondaire { background: transparent; color: var(--accent-lien); }
 button.danger { background: transparent; color: var(--danger); border-color: var(--danger); }
 button.lien { background: none; border: none; padding: 0; min-height: 0; font-weight: 500; text-decoration: underline; }
 button:disabled { opacity: .55; cursor: progress; }
@@ -105,12 +105,12 @@ button:disabled { opacity: .55; cursor: progress; }
   padding: 10px; background: var(--carte); border: 1px solid var(--bord); border-radius: var(--rayon); }
 .barre-tri[hidden] { display: none; }
 .barre-tri select { flex: 1; min-width: 140px; }
-a.bouton.secondaire { background: transparent; color: var(--accent); }
+a.bouton.secondaire { background: transparent; color: var(--accent-lien); }
 .vide { text-align: center; color: var(--doux); padding: 24px 0; }
 @media (max-width: 720px) {
   .onglets a { padding: 10px 10px; }
   .approbation { grid-template-columns: 1fr; }
   .apercu iframe { height: 420px; }
 }
-.titre-album button.lien { color: var(--accent); }
+.titre-album button.lien { color: var(--accent-lien); }
 .titre-album #btn-supprimer-album { color: var(--danger); }
