@@ -249,7 +249,7 @@ async function vueEditionFacture(id) {
   // Total taxes incluses seulement (essence, etc.) : on remplit l'avant-taxes, la TPS et la TVQ, tant que
   // l'employé n'a pas saisi ces cases lui-même.
   const casesTaxes = [form.sous_total, form.tps, form.tvq];
-  let calculAuto = casesTaxes.every((c) => !c.value);
+  let calculAuto = !form.sous_total.value;
   casesTaxes.forEach((c) => c.addEventListener('input', () => { calculAuto = false; }));
   form.total.addEventListener('input', () => {
     if (!calculAuto) return;
