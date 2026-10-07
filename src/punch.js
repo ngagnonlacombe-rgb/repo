@@ -14,6 +14,15 @@ function lireMoment(v) {
   return Number.isNaN(d.getTime()) ? null : versSql(d);
 }
 
+// Position envoyée par le téléphone : [latitude, longitude, précision en mètres] ou trois null.
+function lirePosition(v) {
+  const lat = Number(v?.lat);
+  const lng = Number(v?.lng);
+  if (v == null || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return [null, null, null];
+  const precision = Number(v.precision);
+  return [lat, lng, Number.isFinite(precision) && precision >= 0 ? Math.round(precision) : null];
+}
+
 export function brancherPunch(app, { db }) {
   const ouvert = (employeId) => db.prepare('SELECT * FROM punchs WHERE employe_id = ? AND fin IS NULL').get(employeId);
   const punch = (id) => db.prepare('SELECT * FROM punchs WHERE id = ?').get(id);
@@ -40,8 +49,8 @@ export function brancherPunch(app, { db }) {
   app.post('/api/punch/debut', exigerConnexion, (req, res) => {
     if (ouvert(req.utilisateur.id)) return res.status(409).json({ erreur: 'Ton quart est déjà commencé.' });
     const note = String(req.body?.note ?? '').trim().slice(0, 500) || null;
-    const { lastInsertRowid } = db.prepare('INSERT INTO punchs (employe_id, debut, note) VALUES (?, ?, ?)')
-      .run(req.utilisateur.id, versSql(new Date()), note);
+    const { lastInsertRowid } = db.prepare(`INSERT INTO punchs (employe_id, debut, note, lat_debut, lng_debut, precision_debut)
+      VALUES (?, ?, ?, ?, ?, ?)`).run(req.utilisateur.id, versSql(new Date()), note, ...lirePosition(req.body?.position));
     res.status(201).json({ punch: punch(Number(lastInsertRowid)) });
   });
 
@@ -51,7 +60,8 @@ export function brancherPunch(app, { db }) {
     // La note de fin s'ajoute à celle du début pour que le bureau et l'export de paie la voient au même endroit.
     const noteFin = String(req.body?.note ?? '').trim().slice(0, 500);
     const note = [p.note, noteFin && `Fin : ${noteFin}`].filter(Boolean).join(' · ') || null;
-    db.prepare('UPDATE punchs SET fin = ?, note = ? WHERE id = ?').run(versSql(new Date()), note, p.id);
+    db.prepare('UPDATE punchs SET fin = ?, note = ?, lat_fin = ?, lng_fin = ?, precision_fin = ? WHERE id = ?')
+      .run(versSql(new Date()), note, ...lirePosition(req.body?.position), p.id);
     res.json({ punch: punch(p.id) });
   });
 
@@ -61,7 +71,8 @@ export function brancherPunch(app, { db }) {
     const du = lireMoment(req.query.du);
     const au = lireMoment(req.query.au);
     if (!du || !au) return res.status(400).json({ erreur: 'Période invalide.' });
-    const punchs = db.prepare(`SELECT p.id, p.employe_id, p.debut, p.fin, p.note, u.nom AS modifie_par
+    const punchs = db.prepare(`SELECT p.id, p.employe_id, p.debut, p.fin, p.note, p.lat_debut, p.lng_debut, p.precision_debut,
+      p.lat_fin, p.lng_fin, p.precision_fin, u.nom AS modifie_par
       FROM punchs p LEFT JOIN utilisateurs u ON u.id = p.modifie_par
       WHERE p.debut < ? AND COALESCE(p.fin, '9999') > ? ORDER BY p.debut`).all(au, du);
     const employes = db.prepare(`SELECT id, nom, actif FROM utilisateurs WHERE role = 'employe'
