@@ -932,11 +932,11 @@ function ongletDiscussion(contenu, p, messages, ancre) {
       || '<li class="vide" id="fil-vide">Aucun message. Lance la discussion ou ajoute une photo.</li>'}</ul></div>
     ${p.actif ? `
     <form class="carte composer" id="f-message">
-      <input type="file" id="photo" accept="image/*" hidden>
+      <input type="file" id="photo" accept="image/*" multiple hidden>
       <textarea name="texte" rows="2" placeholder="Écris un message…"></textarea>
       <div class="doux" id="photo-choisie" hidden></div>
       <div class="actions">
-        <button class="secondaire" type="button" id="btn-photo">Ajouter une photo</button>
+        <button class="secondaire" type="button" id="btn-photo">Ajouter des photos</button>
         <button>Envoyer</button>
       </div>
     </form>` : ''}`;
@@ -958,19 +958,26 @@ function ongletDiscussion(contenu, p, messages, ancre) {
     const choisie = document.getElementById('photo-choisie');
     document.getElementById('btn-photo').addEventListener('click', () => champ.click());
     champ.addEventListener('change', () => {
-      choisie.hidden = !champ.files[0];
-      choisie.textContent = champ.files[0] ? `Photo prête à envoyer : ${champ.files[0].name}` : '';
+      const n = champ.files.length;
+      choisie.hidden = !n;
+      choisie.textContent = n > 1 ? `${n} photos prêtes à envoyer` : n ? `Photo prête à envoyer : ${champ.files[0].name}` : '';
     });
+    // Le texte part avec la première photo ; chaque photo suivante devient son propre message.
     formMessage.addEventListener('submit', (e) => {
       e.preventDefault();
       const texte = formMessage.texte.value.trim();
-      if (!texte && !champ.files[0]) { avis('Écris un message ou ajoute une photo.'); return; }
-      occuper(formMessage.querySelector('button:not([type])'), async () => {
-        const donnees = new FormData();
-        donnees.append('texte', texte);
-        if (champ.files[0]) donnees.append('photo', await reduireImage(champ.files[0]));
-        const { message } = await api(`/api/projets/${id}/messages`, { method: 'POST', body: donnees });
-        ajouter([message]);
+      const photos = [...champ.files];
+      if (!texte && !photos.length) { avis('Écris un message ou ajoute une photo.'); return; }
+      const bouton = formMessage.querySelector('button:not([type])');
+      occuper(bouton, async () => {
+        for (let i = 0; i < Math.max(photos.length, 1); i += 1) {
+          if (photos.length > 1) bouton.textContent = `Envoi ${i + 1} / ${photos.length}…`;
+          const donnees = new FormData();
+          donnees.append('texte', i === 0 ? texte : '');
+          if (photos[i]) donnees.append('photo', await reduireImage(photos[i]));
+          const { message } = await api(`/api/projets/${id}/messages`, { method: 'POST', body: donnees });
+          ajouter([message]);
+        }
         formMessage.reset();
         choisie.hidden = true;
         fil.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
