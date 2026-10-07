@@ -86,11 +86,27 @@ export function ouvrirBase(fichier) {
     );
     CREATE INDEX IF NOT EXISTS projet_fichiers_projet ON projet_fichiers (projet_id, dossier, id);
 
+    -- Sous-dossiers du dossier Photos (ex. « Avant », « Toiture »), créés et renommés par l'équipe.
+    CREATE TABLE IF NOT EXISTS projet_albums (
+      id INTEGER PRIMARY KEY,
+      projet_id INTEGER NOT NULL REFERENCES projets(id) ON DELETE CASCADE,
+      nom TEXT NOT NULL,
+      cree_par INTEGER NOT NULL REFERENCES utilisateurs(id),
+      cree_le TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS reglages (
       cle TEXT PRIMARY KEY,
       valeur TEXT NOT NULL
     );
   `);
+  // Bases déjà en service : une photo (déposée ou envoyée dans la discussion) peut être rangée dans un sous-dossier.
+  for (const table of ['projet_fichiers', 'projet_messages']) {
+    const colonnes = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+    if (!colonnes.includes('album_id')) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN album_id INTEGER REFERENCES projet_albums(id) ON DELETE SET NULL`);
+    }
+  }
   return db;
 }
 

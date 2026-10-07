@@ -128,17 +128,21 @@ export function brancherProjets(app, { db, dossierFichiers }) {
     const p = projet(Number(req.params.id));
     const { dossier: nomDossier } = req.params;
     if (!visible(p, req.utilisateur) || !TYPES_PAR_DOSSIER[nomDossier]) return res.status(404).json({ erreur: 'Dossier introuvable.' });
+    // ?album=<id> : un sous-dossier de photos ; ?album=0 : les photos pas encore rangées ; sans paramètre : toutes.
+    const album = nomDossier === 'photos' && req.query.album != null ? Number(req.query.album) || 0 : null;
+    const filtre = (t) => (album == null ? '' : album ? `AND ${t}.album_id = ?` : `AND ${t}.album_id IS NULL`);
+    const valeurs = album ? [album] : [];
     const fichiers = db.prepare(`
       SELECT f.id, f.nom_original, f.type_mime, f.taille, f.cree_le AS cree_le, f.auteur_id, u.nom AS auteur,
-             '/api/projets/' || f.projet_id || '/fichiers/' || f.id AS url, 'dossier' AS source
+             '/api/projets/' || f.projet_id || '/fichiers/' || f.id AS url, 'dossier' AS source, f.album_id AS album_id
       FROM projet_fichiers f JOIN utilisateurs u ON u.id = f.auteur_id
-      WHERE f.projet_id = ? AND f.dossier = ?
+      WHERE f.projet_id = ? AND f.dossier = ? ${filtre('f')}
       ${nomDossier === 'photos' ? `UNION ALL
       SELECT m.id, NULL, m.type_mime, NULL, m.cree_le, m.auteur_id, u.nom,
-             '/api/projets/' || m.projet_id || '/messages/' || m.id || '/photo', 'discussion'
+             '/api/projets/' || m.projet_id || '/messages/' || m.id || '/photo', 'discussion', m.album_id
       FROM projet_messages m JOIN utilisateurs u ON u.id = m.auteur_id
-      WHERE m.projet_id = ? AND m.fichier IS NOT NULL` : ''}
-      ORDER BY cree_le DESC LIMIT 500`).all(...(nomDossier === 'photos' ? [p.id, nomDossier, p.id] : [p.id, nomDossier]));
+      WHERE m.projet_id = ? AND m.fichier IS NOT NULL ${filtre('m')}` : ''}
+      ORDER BY cree_le DESC LIMIT 500`).all(...(nomDossier === 'photos' ? [p.id, nomDossier, ...valeurs, p.id, ...valeurs] : [p.id, nomDossier]));
     res.json({ fichiers });
   });
 
@@ -150,15 +154,92 @@ export function brancherProjets(app, { db, dossierFichiers }) {
       return res.status(400).json({ erreur: req.params.dossier === 'photos'
         ? 'Choisis une photo.' : 'Type de fichier non accepté (PDF, Word, Excel, texte ou image).' });
     }
+    const album = req.params.dossier === 'photos' && Number(req.body?.album_id) ? albumDe(p.id, Number(req.body.album_id)) : null;
+    if (req.body?.album_id && Number(req.body.album_id) && !album) return res.status(404).json({ erreur: 'Dossier de photos introuvable.' });
     const fichier = `${crypto.randomUUID()}.${types[req.file.mimetype]}`;
     fs.writeFileSync(path.join(dossier, fichier), req.file.buffer);
     // Les navigateurs envoient le nom en latin1 : on le remet en UTF-8 pour garder les accents.
     const nom = texte(Buffer.from(req.file.originalname || '', 'latin1').toString('utf8'), 200);
     const { lastInsertRowid } = db.prepare(`INSERT INTO projet_fichiers
-      (projet_id, auteur_id, dossier, fichier, nom_original, type_mime, taille) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-      .run(p.id, req.utilisateur.id, req.params.dossier, fichier, nom, req.file.mimetype, req.file.size);
+      (projet_id, auteur_id, dossier, fichier, nom_original, type_mime, taille, album_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(p.id, req.utilisateur.id, req.params.dossier, fichier, nom, req.file.mimetype, req.file.size, album?.id ?? null);
     db.prepare("UPDATE projets SET maj_le = datetime('now') WHERE id = ?").run(p.id);
     res.status(201).json({ fichier: { id: Number(lastInsertRowid), nom_original: nom } });
+  });
+
+  // ---------- Sous-dossiers de photos ----------
+  // Toute l'équipe peut créer, renommer et trier ; supprimer un sous-dossier remet ses photos dans « Non classées ».
+  const albumDe = (projetId, id) => db.prepare('SELECT * FROM projet_albums WHERE id = ? AND projet_id = ?').get(id, projetId);
+  const projetOuvert = (req, res) => {
+    const p = projet(Number(req.params.id));
+    if (!visible(p, req.utilisateur)) { res.status(404).json({ erreur: 'Projet introuvable.' }); return null; }
+    if (!p.actif) { res.status(403).json({ erreur: 'Ce projet est archivé.' }); return null; }
+    return p;
+  };
+
+  app.get('/api/projets/:id/albums', exigerConnexion, (req, res) => {
+    const p = projet(Number(req.params.id));
+    if (!visible(p, req.utilisateur)) return res.status(404).json({ erreur: 'Projet introuvable.' });
+    const albums = db.prepare(`
+      SELECT a.id, a.nom, a.cree_par,
+             (SELECT COUNT(*) FROM projet_fichiers f WHERE f.album_id = a.id)
+               + (SELECT COUNT(*) FROM projet_messages m WHERE m.album_id = a.id) AS nb_photos,
+             (SELECT '/api/projets/' || a.projet_id || '/fichiers/' || f.id FROM projet_fichiers f
+                WHERE f.album_id = a.id ORDER BY f.id DESC LIMIT 1) AS couverture
+      FROM projet_albums a WHERE a.projet_id = ? ORDER BY a.nom COLLATE NOCASE`).all(p.id);
+    res.json({ albums });
+  });
+
+  app.post('/api/projets/:id/albums', exigerConnexion, (req, res) => {
+    const p = projetOuvert(req, res);
+    if (!p) return;
+    const nom = texte(req.body?.nom, 80);
+    if (!nom) return res.status(400).json({ erreur: 'Donne un nom au dossier.' });
+    const { lastInsertRowid } = db.prepare('INSERT INTO projet_albums (projet_id, nom, cree_par) VALUES (?, ?, ?)')
+      .run(p.id, nom, req.utilisateur.id);
+    res.status(201).json({ album: albumDe(p.id, Number(lastInsertRowid)) });
+  });
+
+  app.patch('/api/projets/:id/albums/:aid', exigerConnexion, (req, res) => {
+    const p = projetOuvert(req, res);
+    if (!p) return;
+    const a = albumDe(p.id, Number(req.params.aid));
+    if (!a) return res.status(404).json({ erreur: 'Dossier de photos introuvable.' });
+    const nom = texte(req.body?.nom, 80);
+    if (!nom) return res.status(400).json({ erreur: 'Donne un nom au dossier.' });
+    db.prepare('UPDATE projet_albums SET nom = ? WHERE id = ?').run(nom, a.id);
+    res.json({ album: albumDe(p.id, a.id) });
+  });
+
+  app.delete('/api/projets/:id/albums/:aid', exigerConnexion, (req, res) => {
+    const p = projetOuvert(req, res);
+    if (!p) return;
+    const a = albumDe(p.id, Number(req.params.aid));
+    if (!a || (a.cree_par !== req.utilisateur.id && req.utilisateur.role !== 'bureau')) {
+      return res.status(404).json({ erreur: 'Dossier de photos introuvable.' });
+    }
+    db.prepare('UPDATE projet_fichiers SET album_id = NULL WHERE album_id = ?').run(a.id);
+    db.prepare('UPDATE projet_messages SET album_id = NULL WHERE album_id = ?').run(a.id);
+    db.prepare('DELETE FROM projet_albums WHERE id = ?').run(a.id);
+    res.status(204).end();
+  });
+
+  // Range des photos dans un sous-dossier (album_id null : les remet dans « Non classées »).
+  app.post('/api/projets/:id/albums/ranger', exigerConnexion, (req, res) => {
+    const p = projetOuvert(req, res);
+    if (!p) return;
+    const { album_id: albumId, photos } = req.body || {};
+    const album = albumId == null ? null : albumDe(p.id, Number(albumId));
+    if (albumId != null && !album) return res.status(404).json({ erreur: 'Dossier de photos introuvable.' });
+    if (!Array.isArray(photos) || !photos.length || photos.length > 500) return res.status(400).json({ erreur: 'Choisis au moins une photo.' });
+    const fichier = db.prepare("UPDATE projet_fichiers SET album_id = ? WHERE id = ? AND projet_id = ? AND dossier = 'photos'");
+    const message = db.prepare('UPDATE projet_messages SET album_id = ? WHERE id = ? AND projet_id = ? AND fichier IS NOT NULL');
+    let ranges = 0;
+    for (const ph of photos) {
+      const requete = ph?.source === 'discussion' ? message : fichier;
+      ranges += Number(requete.run(album?.id ?? null, Number(ph?.id), p.id).changes);
+    }
+    res.json({ ranges });
   });
 
   // Scanner : le téléphone envoie les pages photographiées (JPEG), le serveur en fait un PDF du dossier Documents.

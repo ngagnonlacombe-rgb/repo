@@ -72,7 +72,7 @@ function route() {
   if (!u) return vueConnexion();
   if (ancre.startsWith('facture/')) return vueEditionFacture(Number(ancre.split('/')[1]));
   if (ancre === 'projets' || ancre === 'projets/archives') return vueProjets(ancre === 'projets/archives');
-  if (ancre.startsWith('projet/')) return vueProjet(Number(ancre.split('/')[1]), ancre.split('/')[2]);
+  if (ancre.startsWith('projet/')) return vueProjet(Number(ancre.split('/')[1]), ancre.split('/')[2], Number(ancre.split('/')[3]) || 0);
   if (u.role === 'bureau') {
     if (requete?.includes('qbo=ok')) avis('QuickBooks est connecté.');
     if (requete?.includes('qbo=echec')) avis('La connexion à QuickBooks a échoué. Réessaie.');
@@ -500,7 +500,7 @@ function bulleMessage(m, idProjet) {
 const ONGLETS_PROJET = { discussion: 'Discussion', photos: 'Photos', documents: 'Documents', notes: 'Notes' };
 const taille = (o) => (o >= 1024 * 1024 ? `${(o / 1024 / 1024).toFixed(1).replace('.', ',')} Mo` : `${Math.max(1, Math.round(o / 1024))} Ko`);
 
-async function vueProjet(id, onglet) {
+async function vueProjet(id, onglet, albumId = 0) {
   if (!ONGLETS_PROJET[onglet]) onglet = 'discussion';
   const ancre = location.hash;
   const { projet: p, messages } = await api(`/api/projets/${id}`);
@@ -527,7 +527,8 @@ async function vueProjet(id, onglet) {
 
   const contenu = document.getElementById('contenu-projet');
   if (onglet === 'notes') return ongletNotes(contenu, p);
-  if (onglet === 'photos' || onglet === 'documents') return ongletDossier(contenu, p, onglet, moi);
+  if (onglet === 'photos') return ongletPhotos(contenu, p, moi, albumId);
+  if (onglet === 'documents') return ongletDossier(contenu, p, onglet, moi);
   return ongletDiscussion(contenu, p, messages, ancre);
 }
 
@@ -611,6 +612,171 @@ async function ongletDossier(contenu, p, dossier, moi) {
     occuper(b, async () => {
       await api(`/api/projets/${p.id}/fichiers/${b.dataset.effacer}`, { method: 'DELETE' });
       await afficher();
+    });
+  };
+
+  await afficher();
+}
+
+// Onglet Photos : des sous-dossiers que l'équipe crée et renomme, puis les photos du dossier ouvert
+// (à la racine, celles qui ne sont pas encore rangées). Le mode « Trier » déplace plusieurs photos d'un coup.
+async function ongletPhotos(contenu, p, moi, albumId) {
+  const { albums } = await api(`/api/projets/${p.id}/albums`);
+  const album = albums.find((a) => a.id === albumId);
+  if (albumId && !album) { location.hash = `projet/${p.id}/photos`; return; }
+  const peutSupprimer = album && (album.cree_par === moi.id || moi.role === 'bureau');
+  const choisies = new Map();
+  let tri = false;
+
+  contenu.innerHTML = `
+    ${album ? `
+      <p><a href="#projet/${p.id}/photos">← Tous les dossiers photos</a></p>
+      <div class="titre-album"><h2>📁 ${h(album.nom)}</h2>
+        ${p.actif ? `<button class="lien" type="button" id="btn-renommer">Renommer</button>
+        ${peutSupprimer ? '<button class="lien" type="button" id="btn-supprimer-album">Supprimer le dossier</button>' : ''}` : ''}</div>`
+    : `<div class="dossiers">
+        ${albums.map((a) => `<a class="dossier-photo" href="#projet/${p.id}/photos/${a.id}">
+          ${a.couverture ? `<img src="${a.couverture}" alt="" loading="lazy">` : '<span class="icone">📁</span>'}
+          <strong>${h(a.nom)}</strong><span class="doux">${a.nb_photos} photo${a.nb_photos > 1 ? 's' : ''}</span></a>`).join('')}
+        ${p.actif ? '<button class="dossier-photo nouveau" type="button" id="btn-nouvel-album"><span class="icone">＋</span><strong>Nouveau dossier</strong></button>' : ''}
+      </div>`}
+    ${p.actif ? `<input type="file" id="fichier-dossier" accept="image/*" multiple hidden>
+      <button class="pleine" type="button" id="btn-deposer">${album ? `Ajouter des photos dans « ${h(album.nom)} »` : 'Ajouter des photos'}</button>` : ''}
+    <div class="entete-photos"><h3>${album ? 'Photos du dossier' : (albums.length ? 'Photos non classées' : 'Photos')}</h3>
+      ${p.actif ? '<button class="secondaire" type="button" id="btn-trier">Trier</button>' : ''}</div>
+    <div class="barre-tri" id="barre-tri" hidden>
+      <span id="nb-choisies">Touche les photos à déplacer</span>
+      <select id="destination">
+        ${album ? '<option value="">Non classées</option>' : ''}
+        ${albums.filter((a) => a.id !== albumId).map((a) => `<option value="${a.id}">${h(a.nom)}</option>`).join('')}
+        <option value="nouveau">+ Nouveau dossier…</option>
+      </select>
+      <button type="button" id="btn-deplacer" disabled>Déplacer</button>
+    </div>
+    ${!album && !albums.length ? '<p class="doux">Crée des dossiers (ex. « Avant », « Toiture ») pour démêler les photos.</p>' : ''}
+    <div id="liste-dossier"><p class="vide">Chargement…</p></div>`;
+
+  const nommer = (actuel) => {
+    const nom = prompt('Nom du dossier de photos :', actuel || '');
+    return nom?.trim() || null;
+  };
+  const creerAlbum = async () => {
+    const nom = nommer();
+    if (!nom) return null;
+    return (await api(`/api/projets/${p.id}/albums`, { method: 'POST', json: { nom } })).album;
+  };
+
+  const liste = document.getElementById('liste-dossier');
+  const afficher = async () => {
+    const { fichiers } = await api(`/api/projets/${p.id}/dossiers/photos?album=${albumId}`);
+    const effacable = (f) => f.source !== 'discussion' && (f.auteur_id === moi.id || moi.role === 'bureau');
+    choisies.clear();
+    majBarre();
+    liste.innerHTML = !fichiers.length
+      ? `<div class="carte vide">${album ? 'Ce dossier est vide.' : (albums.length ? 'Toutes les photos sont rangées.' : 'Aucune photo pour l\'instant.')}</div>`
+      : `<div class="galerie">${fichiers.map((f) => `
+        <figure data-photo="${f.source}:${f.id}">
+          <a href="${f.url}" target="_blank" rel="noopener"><img src="${f.url}" alt="Photo du projet" loading="lazy"></a>
+          <span class="coche" aria-hidden="true">✓</span>
+          <figcaption class="doux">${h(f.auteur)} · ${heure(f.cree_le)}${f.source === 'discussion' ? ' · discussion' : ''}
+            ${effacable(f) ? `<button class="lien" type="button" data-effacer="${f.id}">Effacer</button>` : ''}</figcaption>
+        </figure>`).join('')}</div>`;
+    liste.classList.toggle('en-tri', tri);
+  };
+
+  const barre = document.getElementById('barre-tri');
+  const btnDeplacer = document.getElementById('btn-deplacer');
+  function majBarre() {
+    if (!barre) return;
+    document.getElementById('nb-choisies').textContent = choisies.size
+      ? `${choisies.size} photo${choisies.size > 1 ? 's' : ''} choisie${choisies.size > 1 ? 's' : ''}, vers :` : 'Touche les photos à déplacer';
+    btnDeplacer.disabled = !choisies.size;
+  }
+
+  document.getElementById('btn-trier')?.addEventListener('click', (e) => {
+    tri = !tri;
+    e.currentTarget.textContent = tri ? 'Terminer' : 'Trier';
+    barre.hidden = !tri;
+    liste.classList.toggle('en-tri', tri);
+    if (!tri) {
+      choisies.clear();
+      liste.querySelectorAll('figure.choisie').forEach((f) => f.classList.remove('choisie'));
+      majBarre();
+    }
+  });
+
+  btnDeplacer?.addEventListener('click', () => occuper(btnDeplacer, async () => {
+    let cible = document.getElementById('destination').value;
+    if (cible === 'nouveau') {
+      const nouveau = await creerAlbum();
+      if (!nouveau) return;
+      cible = nouveau.id;
+    }
+    const photos = [...choisies.values()];
+    await api(`/api/projets/${p.id}/albums/ranger`, { method: 'POST', json: { album_id: cible ? Number(cible) : null, photos } });
+    avis(`${photos.length} photo${photos.length > 1 ? 's' : ''} déplacée${photos.length > 1 ? 's' : ''}.`);
+    route();
+  }));
+
+  document.getElementById('btn-nouvel-album')?.addEventListener('click', (e) => occuper(e.currentTarget, async () => {
+    const a = await creerAlbum();
+    if (a) location.hash = `projet/${p.id}/photos/${a.id}`;
+  }));
+
+  document.getElementById('btn-renommer')?.addEventListener('click', (e) => {
+    const nom = nommer(album.nom);
+    if (!nom || nom === album.nom) return;
+    occuper(e.currentTarget, async () => {
+      await api(`/api/projets/${p.id}/albums/${album.id}`, { method: 'PATCH', json: { nom } });
+      avis('Dossier renommé.');
+      route();
+    });
+  });
+
+  document.getElementById('btn-supprimer-album')?.addEventListener('click', (e) => {
+    if (!confirm(`Supprimer le dossier « ${album.nom} » ? Ses photos ne sont pas effacées : elles retournent dans les photos non classées.`)) return;
+    occuper(e.currentTarget, async () => {
+      await api(`/api/projets/${p.id}/albums/${album.id}`, { method: 'DELETE' });
+      location.hash = `projet/${p.id}/photos`;
+    });
+  });
+
+  const champ = document.getElementById('fichier-dossier');
+  const bouton = document.getElementById('btn-deposer');
+  bouton?.addEventListener('click', () => champ.click());
+  champ?.addEventListener('change', () => {
+    const fichiers = [...champ.files];
+    if (!fichiers.length) return;
+    occuper(bouton, async () => {
+      for (const [i, fichier] of fichiers.entries()) {
+        bouton.textContent = `Envoi ${i + 1} de ${fichiers.length}…`;
+        const donnees = new FormData();
+        if (album) donnees.append('album_id', String(album.id));
+        donnees.append('fichier', await reduireImage(fichier), fichier.name);
+        await api(`/api/projets/${p.id}/dossiers/photos`, { method: 'POST', body: donnees });
+      }
+      avis(fichiers.length > 1 ? `${fichiers.length} photos ajoutées.` : 'Photo ajoutée.');
+      route();
+    });
+    champ.value = '';
+  });
+
+  contenu.onclick = (e) => {
+    const figure = e.target.closest('[data-photo]');
+    if (tri && figure) {
+      e.preventDefault();
+      const [source, id] = figure.dataset.photo.split(':');
+      if (choisies.has(figure.dataset.photo)) choisies.delete(figure.dataset.photo);
+      else choisies.set(figure.dataset.photo, { source, id: Number(id) });
+      figure.classList.toggle('choisie', choisies.has(figure.dataset.photo));
+      majBarre();
+      return;
+    }
+    const b = e.target.closest('[data-effacer]');
+    if (!b || !confirm('Effacer cette photo ?')) return;
+    occuper(b, async () => {
+      await api(`/api/projets/${p.id}/fichiers/${b.dataset.effacer}`, { method: 'DELETE' });
+      route();
     });
   };
 

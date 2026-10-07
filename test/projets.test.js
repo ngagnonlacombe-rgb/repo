@@ -166,3 +166,40 @@ test('scanner : les pages photographiées deviennent un PDF dans Documents', asy
   const vide = await marc(`/api/projets/${idProjet}/scanner`, { method: 'POST', body: new FormData() });
   assert.equal(vide.status, 400);
 });
+
+test('sous-dossiers de photos : création et renommage par les employés, rangement, suppression', async () => {
+  const url = `/api/projets/${idProjet}/albums`;
+  assert.equal((await marc(url, { method: 'POST', json: { nom: ' ' } })).status, 400);
+  const a = await marc(url, { method: 'POST', json: { nom: 'Avant' } });
+  assert.equal(a.status, 201);
+  const idAvant = a.corps.album.id;
+  const r = await julie(`${url}/${idAvant}`, { method: 'PATCH', json: { nom: 'Avant les travaux' } });
+  assert.equal(r.corps.album.nom, 'Avant les travaux');
+  const idToit = (await julie(url, { method: 'POST', json: { nom: 'Toiture' } })).corps.album.id;
+
+  // Dépôt directement dans un sous-dossier.
+  const photo = new FormData();
+  photo.append('album_id', String(idToit));
+  photo.append('fichier', new Blob([PNG], { type: 'image/png' }), 'pignon.png');
+  assert.equal((await marc(`/api/projets/${idProjet}/dossiers/photos`, { method: 'POST', body: photo })).status, 201);
+
+  // Les photos déjà là (déposée et discussion) sont « non classées » ; on les range dans « Avant les travaux ».
+  const nonClassees = (await marc(`/api/projets/${idProjet}/dossiers/photos?album=0`)).corps.fichiers;
+  assert.equal(nonClassees.length, 2);
+  const rangement = await marc(`${url}/ranger`, {
+    method: 'POST', json: { album_id: idAvant, photos: nonClassees.map((f) => ({ source: f.source, id: f.id })) },
+  });
+  assert.equal(rangement.corps.ranges, 2);
+  assert.equal((await marc(`/api/projets/${idProjet}/dossiers/photos?album=0`)).corps.fichiers.length, 0);
+  assert.equal((await marc(`/api/projets/${idProjet}/dossiers/photos?album=${idAvant}`)).corps.fichiers.length, 2);
+  assert.equal((await marc(`/api/projets/${idProjet}/dossiers/photos`)).corps.fichiers.length, 3);
+
+  const albums = (await marc(url)).corps.albums;
+  assert.deepEqual(albums.map((x) => [x.nom, x.nb_photos]), [['Avant les travaux', 2], ['Toiture', 1]]);
+
+  // Seul le créateur ou le bureau supprime un sous-dossier ; ses photos reviennent dans « Non classées ».
+  assert.equal((await julie(`${url}/${idAvant}`, { method: 'DELETE' })).status, 404);
+  assert.equal((await marc(`${url}/${idAvant}`, { method: 'DELETE' })).status, 204);
+  assert.equal((await marc(`/api/projets/${idProjet}/dossiers/photos?album=0`)).corps.fichiers.length, 2);
+  assert.equal((await marc(url, { method: 'PATCH', json: {} })).status, 404);
+});
