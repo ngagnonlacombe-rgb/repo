@@ -48,7 +48,10 @@ export function brancherPunch(app, { db }) {
   app.post('/api/punch/fin', exigerConnexion, (req, res) => {
     const p = ouvert(req.utilisateur.id);
     if (!p) return res.status(409).json({ erreur: 'Aucun quart en cours.' });
-    db.prepare('UPDATE punchs SET fin = ? WHERE id = ?').run(versSql(new Date()), p.id);
+    // La note de fin s'ajoute à celle du début pour que le bureau et l'export de paie la voient au même endroit.
+    const noteFin = String(req.body?.note ?? '').trim().slice(0, 500);
+    const note = [p.note, noteFin && `Fin : ${noteFin}`].filter(Boolean).join(' · ') || null;
+    db.prepare('UPDATE punchs SET fin = ?, note = ? WHERE id = ?').run(versSql(new Date()), note, p.id);
     res.json({ punch: punch(p.id) });
   });
 

@@ -55,8 +55,9 @@ test('l\'employé commence et termine son quart ; pas deux quarts ouverts', asyn
   assert.equal(h.punchs.length, 1);
   assert.equal(h.punchs[0].fin, null);
 
-  const f = await marc('/api/punch/fin', { method: 'POST' });
+  const f = await marc('/api/punch/fin', { method: 'POST', json: { note: 'Toiture finie' } });
   assert.equal(f.status, 200);
+  assert.equal(f.corps.punch.note, 'Chantier Tremblay · Fin : Toiture finie');
   assert.ok(f.corps.punch.fin >= f.corps.punch.debut);
   assert.equal((await marc('/api/punch')).corps.enCours, null);
   assert.equal((await marc(`/api/bureau/heures?${semaine()}`)).status, 403);
@@ -96,6 +97,6 @@ test('export des heures pour la paie (CSV, heure du Québec)', async () => {
   const texte = await r.text();
   const lignes = texte.replace(/^\ufeff/, '').trim().split('\r\n');
   assert.equal(lignes[0], '"Employé";"Date";"Début";"Fin";"Heures travaillées";"Dîner non payé";"Heures payées";"Note"');
-  assert.match(lignes[1], /^"Marc";"\d{4}-\d{2}-\d{2}";"\d{2}:\d{2}";"\d{2}:\d{2}";"0,0\d";"0,00";"0,0\d";"Chantier Tremblay"$/);
+  assert.match(lignes[1], /^"Marc";"\d{4}-\d{2}-\d{2}";"\d{2}:\d{2}";"\d{2}:\d{2}";"0,0\d";"0,00";"0,0\d";"Chantier Tremblay · Fin : Toiture finie"$/);
   assert.match(lignes.at(-1), /^"Total Marc";"";"";"";"";"";"0,0\d";""$/);
 });
