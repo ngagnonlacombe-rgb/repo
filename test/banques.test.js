@@ -149,3 +149,13 @@ test('mêmes catégories qu\'Agendrix ; une base existante accepte les nouvelles
   assert.equal(r.corps.soldes.conge_perso, -7.5);
   assert.equal((await inscrire({ type: 'inventee', heures: 1, date: '2026-10-01' })).status, 400);
 });
+
+test('l\'employé ne voit que Temps accumulé, Maladie et Vacances ; le bureau voit tout', async () => {
+  const inscrire = (json) => bureau('/api/bureau/mouvements', { method: 'POST', json: { employe_id: idMarc, ...json } });
+  await inscrire({ type: 'ferie', heures: -8, date: '2026-10-02' });
+  const vu = (await marc('/api/mes-heures')).corps;
+  assert.deepEqual(Object.keys(vu.soldes).sort(), ['banque', 'maladie', 'tauxVacances', 'vacances']);
+  assert.ok(vu.mouvements.every((m) => ['banque', 'maladie', 'vacances'].includes(m.type)));
+  const { employes } = (await bureau('/api/bureau/soldes')).corps;
+  assert.equal(employes.find((e) => e.id === idMarc).soldes.ferie, -8);
+});

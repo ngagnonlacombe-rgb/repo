@@ -15,6 +15,8 @@ export const REGLES_DEFAUT = {
 // Mêmes catégories qu'Agendrix. Banque, vacances et maladie se calculent avec les heures travaillées ;
 // les autres ne bougent qu'avec ce que le bureau inscrit.
 const TYPES = ['banque', 'absence', 'conge_perso', 'ferie', 'maladie', 'maladie_np', 'vacances'];
+// Les employés ne voient que ces banques ; les autres restent au bureau seulement.
+const TYPES_EMPLOYE = ['banque', 'maladie', 'vacances'];
 const FUSEAU = 'America/Toronto';
 
 const enDate = (t) => new Date(`${t.replace(' ', 'T')}Z`);
@@ -97,8 +99,10 @@ export function brancherBanques(app, { db }) {
       ...s, heures: arrondi(s.heures), banque: arrondi(Math.max(0, s.heures - r.semaine) * r.multiplicateurBanque),
     }));
     const pris = db.prepare(`SELECT type, heures, date, note FROM heures_mouvements WHERE employe_id = ?
-      ORDER BY date DESC, id DESC LIMIT 30`).all(req.utilisateur.id);
-    res.json({ semaines: liste, soldes: soldes(db, req.utilisateur.id), mouvements: pris, regles: r });
+      AND type IN (${TYPES_EMPLOYE.map(() => '?').join(', ')}) ORDER BY date DESC, id DESC LIMIT 30`).all(req.utilisateur.id, ...TYPES_EMPLOYE);
+    const tous = soldes(db, req.utilisateur.id);
+    const visibles = Object.fromEntries([...TYPES_EMPLOYE, 'tauxVacances'].map((cle) => [cle, tous[cle]]));
+    res.json({ semaines: liste, soldes: visibles, mouvements: pris, regles: r });
   });
 
   // ---------- Bureau ----------
