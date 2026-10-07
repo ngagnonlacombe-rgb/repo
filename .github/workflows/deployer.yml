@@ -1,0 +1,66 @@
+# À chaque changement sur main : les tests roulent, puis l'app est déployée sur Fly.io.
+# Le déploiement attend que les secrets FLY_API_TOKEN et CODE_INSTALLATION soient ajoutés dans GitHub.
+name: Tests et déploiement
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  deploiement:
+    needs: tests
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    concurrency: deploiement
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      CODE_INSTALLATION: ${{ secrets.CODE_INSTALLATION }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Vérifier les secrets
+        id: cle
+        run: |
+          if [ -z "$FLY_API_TOKEN" ] || [ -z "$CODE_INSTALLATION" ]; then
+            echo "::warning::Ajoute les secrets FLY_API_TOKEN et CODE_INSTALLATION dans Settings > Secrets and variables > Actions pour activer le déploiement."
+            echo "presente=non" >> "$GITHUB_OUTPUT"
+          else
+            echo "presente=oui" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+        if: steps.cle.outputs.presente == 'oui'
+
+      - name: Préparer l'app (la première fois seulement)
+        if: steps.cle.outputs.presente == 'oui'
+        run: |
+          APP=$(sed -n "s/^app = '\(.*\)'/\1/p" fly.toml)
+          if ! flyctl status --app "$APP" > /dev/null 2>&1; then
+            flyctl apps create "$APP" --org personal
+          fi
+          if ! flyctl volumes list --app "$APP" | grep -q donnees; then
+            flyctl volumes create donnees --app "$APP" --region yyz --size 1 --yes
+          fi
+          # Clé qui chiffre les jetons QuickBooks dans la base, générée une seule fois et jamais affichée.
+          if ! flyctl secrets list --app "$APP" | grep -q CLE_SECRETE; then
+            flyctl secrets set "CLE_SECRETE=$(openssl rand -hex 32)" --app "$APP" --stage
+          fi
+          # Code demandé pour créer le compte du bureau, choisi par toi dans les secrets GitHub.
+          flyctl secrets set "CODE_INSTALLATION=$CODE_INSTALLATION" --app "$APP" --stage
+
+      - name: Déployer
+        if: steps.cle.outputs.presente == 'oui'
+        run: flyctl deploy --remote-only --ha=false
