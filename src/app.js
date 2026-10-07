@@ -103,7 +103,8 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       req.utilisateur.id, nomFichier, req.file.mimetype, req.file.originalname?.slice(0, 200) || null,
       lu?.fournisseur ?? null, lu?.numero ?? null, dateValide(lu?.date_facture),
-      ...CHAMPS_MONTANT.map((c) => montant(lu?.[c])), lu ? JSON.stringify(lu) : null,
+      ...Object.values(completerTaxes(Object.fromEntries(CHAMPS_MONTANT.map((c) => [c, montant(lu?.[c])])))),
+      lu ? JSON.stringify(lu) : null,
     );
     res.status(201).json({ facture: facture(Number(lastInsertRowid)), luAutomatiquement: Boolean(lu) });
   });
@@ -122,7 +123,7 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
     const b = req.body || {};
     const valeurs = {
       fournisseur: texte(b.fournisseur, 120), numero: texte(b.numero, 40), date_facture: dateValide(b.date_facture),
-      note: texte(b.note, 500), ...Object.fromEntries(CHAMPS_MONTANT.map((c) => [c, montant(b[c])])),
+      note: texte(b.note, 500), ...completerTaxes(Object.fromEntries(CHAMPS_MONTANT.map((c) => [c, montant(b[c])]))),
     };
     if (b.soumettre) {
       if (!valeurs.fournisseur) return res.status(400).json({ erreur: 'Indique le fournisseur.' });
@@ -331,6 +332,16 @@ function montant(v) {
   if (v == null || v === '') return null;
   const n = typeof v === 'number' ? v : Number(String(v).replace(/\s|\$/g, '').replace(',', '.'));
   return Number.isFinite(n) && n >= 0 && n < 10_000_000 ? Math.round(n * 100) / 100 : null;
+}
+
+// Reçus d'essence et autres : seul le total taxes incluses est connu. On en tire l'avant-taxes, la TPS et la TVQ
+// du Québec ; la TVQ prend l'écart d'arrondi pour que la somme retombe exactement sur le total.
+export function completerTaxes(m) {
+  if (m.total == null || m.sous_total != null || m.tps != null || m.tvq != null) return m;
+  const cents = Math.round(m.total * 100);
+  const sousTotal = Math.round(cents / 1.14975);
+  const tps = Math.round(sousTotal * 0.05);
+  return { sous_total: sousTotal / 100, tps: tps / 100, tvq: (cents - sousTotal - tps) / 100, total: m.total };
 }
 
 function dateValide(v) {
