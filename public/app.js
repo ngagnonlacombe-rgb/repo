@@ -1379,6 +1379,14 @@ async function vueHeures(semaineChoisie) {
 }
 
 // Bureau : soldes d'un employé, congés pris, soldes de départ et ajustements.
+// « 19h28 », « 19:28 », « 19,5 » ou « 19.5 » → heures décimales (null si illisible).
+function lireHeures(texte) {
+  const t = String(texte).trim().replace(/\s/g, '');
+  const hm = t.match(/^(\d{1,4})[h:](\d{0,2})$/i);
+  const n = hm ? Number(hm[1]) + Number(hm[2] || 0) / 60 : Number(t.replace(',', '.'));
+  return Number.isFinite(n) && n > 0 && n <= 2000 && !(hm && Number(hm[2]) >= 60) ? n : null;
+}
+
 async function vueBanques(employeId) {
   const [{ employes, regles }, { mouvements }] = await Promise.all([
     api('/api/bureau/soldes'), api(`/api/bureau/mouvements/${employeId}`)]);
@@ -1393,7 +1401,7 @@ async function vueBanques(employeId) {
       <h2 style="margin-top:0">Inscrire</h2>
       <label>Banque<select name="type">${Object.entries(NOMS_BANQUES).map(([cle, nom]) => `<option value="${cle}">${nom}</option>`).join('')}</select></label>
       <label>Quoi<select name="sens"><option value="-1">Congé pris (retire du solde)</option><option value="1">Solde de départ ou ajout</option></select></label>
-      <label>Heures<input name="heures" type="number" step="0.25" min="0.25" max="2000" required></label>
+      <label>Heures (ex. 19h28 ou 19,5)<input name="heures" inputmode="decimal" placeholder="19h28" required></label>
       <label>Date<input name="date" type="date" value="${aujourdhui}" required></label>
       <label>Note (facultatif)<input name="note" maxlength="300"></label>
       <div class="actions"><button>Inscrire</button></div>
@@ -1415,9 +1423,11 @@ async function vueBanques(employeId) {
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
     const d = lireFormulaire(form);
+    const heures = lireHeures(d.heures);
+    if (!heures) { avis('Écris les heures comme 19h28 ou 19,5.'); return; }
     occuper(form.querySelector('button'), async () => {
       await api('/api/bureau/mouvements', { method: 'POST', json: {
-        employe_id: employeId, type: d.type, heures: Number(d.sens) * Number(d.heures), date: d.date, note: d.note } });
+        employe_id: employeId, type: d.type, heures: Number(d.sens) * heures, date: d.date, note: d.note } });
       avis('Inscrit.');
       route();
     });
