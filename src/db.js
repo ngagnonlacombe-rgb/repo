@@ -130,11 +130,28 @@ export function ouvrirBase(fichier) {
     CREATE INDEX IF NOT EXISTS punchs_employe ON punchs (employe_id, debut);
     CREATE UNIQUE INDEX IF NOT EXISTS punchs_un_seul_ouvert ON punchs (employe_id) WHERE fin IS NULL;
 
+    -- Banque d'heures, vacances et maladie : congés pris (heures négatives) et ajustements du bureau.
+    CREATE TABLE IF NOT EXISTS heures_mouvements (
+      id INTEGER PRIMARY KEY,
+      employe_id INTEGER NOT NULL REFERENCES utilisateurs(id) ON DELETE CASCADE,
+      type TEXT NOT NULL CHECK (type IN ('banque', 'vacances', 'maladie')),
+      heures REAL NOT NULL,
+      date TEXT NOT NULL,
+      note TEXT,
+      cree_par INTEGER REFERENCES utilisateurs(id),
+      cree_le TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS heures_mouvements_employe ON heures_mouvements (employe_id, date);
+
     CREATE TABLE IF NOT EXISTS reglages (
       cle TEXT PRIMARY KEY,
       valeur TEXT NOT NULL
     );
   `);
+  // Taux de vacances propre à un employé (ex. 6 % après 3 ans) ; NULL = taux par défaut des règles.
+  if (!db.prepare('PRAGMA table_info(utilisateurs)').all().some((c) => c.name === 'taux_vacances')) {
+    db.exec('ALTER TABLE utilisateurs ADD COLUMN taux_vacances REAL');
+  }
   // Bases déjà en service : une photo (déposée ou envoyée dans la discussion) peut être rangée dans un sous-dossier.
   for (const table of ['projet_fichiers', 'projet_messages']) {
     const colonnes = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);

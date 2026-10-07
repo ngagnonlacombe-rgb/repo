@@ -82,6 +82,7 @@ function route() {
     if (ancre === 'factures') return vueEmploye();
     if (ancre === 'employes') return vueEmployes();
     if (ancre === 'heures' || ancre.startsWith('heures/')) return vueHeures(ancre.split('/')[1]);
+    if (ancre.startsWith('banques/')) return vueBanques(Number(ancre.split('/')[1]));
     if (ancre.startsWith('bureau/')) return vueBureau(ancre.split('/')[1]);
     return vueBureau('en_attente');
   }
@@ -1149,9 +1150,15 @@ function lundi(d) {
   return l;
 }
 
+// Heures décimales (7.5) affichées « 7 h 30 », avec le signe si négatif.
+const heuresDec = (n) => `${n < 0 ? '−' : ''}${duree(Math.abs(n) * 3600000)}`;
+const NOMS_BANQUES = { banque: 'Banque d\'heures', vacances: 'Vacances', maladie: 'Maladie' };
+const tuilesSoldes = (s) => `<div class="soldes">${Object.entries(NOMS_BANQUES).map(([cle, nom]) => `
+  <div class="solde ${s[cle] < 0 ? 'negatif' : ''}"><span class="doux">${nom}</span><strong>${heuresDec(s[cle])}</strong></div>`).join('')}</div>`;
+
 async function vuePunch() {
   const ancre = location.hash || '#punch';
-  const { enCours, recents } = await api('/api/punch');
+  const [{ enCours, recents }, mesHeures] = await Promise.all([api('/api/punch'), api('/api/mes-heures')]);
   const debutSemaine = lundi(new Date());
   const cetteSemaine = recents.filter((p) => dateSql(p.debut) >= debutSemaine);
   vue.innerHTML = `${ongletsBureau('punch')}
@@ -1162,12 +1169,24 @@ async function vuePunch() {
     </div>
     ${enCours ? '' : '<input id="note-quart" placeholder="Chantier ou note (facultatif)" maxlength="500">'}
     <button class="geant ${enCours ? 'danger' : 'succes'}" type="button" id="btn-punch">${enCours ? 'Terminer mon quart' : 'Commencer mon quart'}</button>
+    <h2>Mes banques</h2>
+    ${tuilesSoldes(mesHeures.soldes)}
     <h2>Cette semaine : ${duree(cetteSemaine.reduce((t, p) => t + dureeQuart(p, Date.now()), 0))}</h2>
-    <div class="carte"><ul class="liste">${recents.slice(0, 14).map((p) => `
+    <div class="carte"><ul class="liste">${cetteSemaine.map((p) => `
       <li><div class="infos"><strong>${jourCourt(p.debut)}</strong>
         <div class="doux">${heureCourte(p.debut)} à ${p.fin ? heureCourte(p.fin) : 'en cours'}${p.note ? ` · ${h(p.note)}` : ''}</div></div>
-        <strong>${duree(dureeQuart(p, Date.now()))}</strong></li>`).join('') || '<li class="vide">Aucun quart pour l\'instant.</li>'}</ul></div>
-    <p class="doux">Un oubli ou une erreur ? Écris au bureau dans Messages, il peut corriger tes heures.</p>`;
+        <strong>${duree(dureeQuart(p, Date.now()))}</strong></li>`).join('') || '<li class="vide">Aucun quart cette semaine.</li>'}</ul></div>
+    <p class="doux">Un oubli ou une erreur ? Écris au bureau dans Messages, il peut corriger tes heures.</p>
+    <h2>Semaines passées</h2>
+    <div class="carte"><ul class="liste">${mesHeures.semaines.filter((sem) => new Date(`${sem.lundi}T00:00:00`) < debutSemaine).map((sem) => `
+      <li><div class="infos"><strong>Semaine du ${new Date(`${sem.lundi}T12:00:00`).toLocaleDateString('fr-CA', { day: 'numeric', month: 'long', year: 'numeric' })}</strong>
+        ${sem.banque ? `<div class="doux">+ ${heuresDec(sem.banque)} en banque</div>` : ''}</div>
+        <strong>${heuresDec(sem.heures)}</strong></li>`).join('') || '<li class="vide">Aucune semaine pour l\'instant.</li>'}</ul></div>
+    ${mesHeures.mouvements.length ? `<h2>Congés et ajustements</h2>
+    <div class="carte"><ul class="liste">${mesHeures.mouvements.map((m) => `
+      <li><div class="infos"><strong>${NOMS_BANQUES[m.type]}</strong>
+        <div class="doux">${new Date(`${m.date}T12:00:00`).toLocaleDateString('fr-CA', { day: 'numeric', month: 'short', year: 'numeric' })}${m.note ? ` · ${h(m.note)}` : ''}</div></div>
+        <strong>${m.heures > 0 ? '+' : ''}${heuresDec(m.heures)}</strong></li>`).join('')}</ul></div>` : ''}`;
 
   const bouton = document.getElementById('btn-punch');
   bouton.addEventListener('click', () => {
@@ -1204,7 +1223,8 @@ async function vueHeures(semaineChoisie) {
   const precedente = new Date(debut);
   precedente.setDate(precedente.getDate() - 7);
   const periode = `du=${encodeURIComponent(debut.toISOString())}&au=${encodeURIComponent(fin.toISOString())}`;
-  const { employes, punchs } = await api(`/api/bureau/heures?${periode}`);
+  const [{ employes, punchs }, banques] = await Promise.all([api(`/api/bureau/heures?${periode}`), api('/api/bureau/soldes')]);
+  const soldesDe = (id) => banques.employes.find((x) => x.id === id)?.soldes;
   const maintenant = Date.now();
   const titre = `${debut.toLocaleDateString('fr-CA', { day: 'numeric', month: 'long' })} au ${
     new Date(fin - 86400000).toLocaleDateString('fr-CA', { day: 'numeric', month: 'long', year: 'numeric' })}`;
@@ -1222,7 +1242,9 @@ async function vueHeures(semaineChoisie) {
     ${employes.map((e) => {
       const siens = punchs.filter((p) => p.employe_id === e.id);
       return `<details class="carte heures-employe" ${siens.length ? '' : ''}>
-        <summary><strong>${h(e.nom)}</strong><span>${duree(siens.reduce((t, p) => t + dureeQuart(p, maintenant), 0))}</span></summary>
+        <summary><strong>${h(e.nom)}</strong><span>${duree(siens.reduce((t, p) => t + dureeQuart(p, maintenant), 0))}</span>
+        ${soldesDe(e.id) ? `<div class="doux soldes-ligne">Banque ${heuresDec(soldesDe(e.id).banque)} · Vacances ${heuresDec(soldesDe(e.id).vacances)} · Maladie ${heuresDec(soldesDe(e.id).maladie)}
+          · <a href="#banques/${e.id}">Banques et congés</a></div>` : ''}</summary>
         <ul class="liste">${siens.map((p) => `
           <li class="quart" data-id="${p.id}">
             <div class="infos"><strong>${jourCourt(p.debut)}</strong> · ${heureCourte(p.debut)} à ${p.fin ? heureCourte(p.fin) : 'en cours'}
@@ -1231,7 +1253,28 @@ async function vueHeures(semaineChoisie) {
           </li>`).join('') || '<li class="vide">Aucun quart cette semaine.</li>'}</ul>
         <button class="secondaire" type="button" data-ajouter="${e.id}">Ajouter un quart oublié</button>
       </details>`;
-    }).join('') || '<div class="carte vide">Aucun employé pour l\'instant.</div>'}`;
+    }).join('') || '<div class="carte vide">Aucun employé pour l\'instant.</div>'}
+    <details class="carte">
+      <summary><strong>Règles des banques</strong></summary>
+      <form id="f-regles">
+        <label>Heures normales par semaine (au-delà : banque)<input name="semaine" type="number" step="0.5" min="1" max="80" value="${banques.regles.semaine}"></label>
+        <label>Heure supplémentaire mise en banque à<select name="multiplicateurBanque">
+          ${[[1, 'temps simple (1 h = 1 h)'], [1.5, 'temps et demi (1 h = 1 h 30)'], [2, 'temps double (1 h = 2 h)']].map(([v, t]) =>
+            `<option value="${v}" ${banques.regles.multiplicateurBanque === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+        <label>Vacances : % des heures travaillées (par défaut)<input name="tauxVacances" type="number" step="0.5" min="0" max="20" value="${banques.regles.tauxVacances}"></label>
+        <label>Heures de maladie payées par année<input name="maladieAnnuelle" type="number" step="0.5" min="0" max="200" value="${banques.regles.maladieAnnuelle}"></label>
+        <div class="actions"><button>Enregistrer les règles</button></div>
+      </form>
+    </details>`;
+  const formRegles = document.getElementById('f-regles');
+  formRegles.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    occuper(formRegles.querySelector('button'), async () => {
+      await api('/api/bureau/regles-heures', { method: 'PUT', json: lireFormulaire(formRegles) });
+      avis('Règles enregistrées. Les soldes sont recalculés.');
+      route();
+    });
+  });
 
   const formulaire = (p, employeId) => `
     <form class="carte correction">
@@ -1271,6 +1314,69 @@ async function vueHeures(semaineChoisie) {
         avis('Heures enregistrées.');
         route();
       });
+    });
+  };
+}
+
+// Bureau : soldes d'un employé, congés pris, soldes de départ et ajustements.
+async function vueBanques(employeId) {
+  const [{ employes, regles }, { mouvements }] = await Promise.all([
+    api('/api/bureau/soldes'), api(`/api/bureau/mouvements/${employeId}`)]);
+  const e = employes.find((x) => x.id === employeId);
+  if (!e) { location.hash = 'heures'; return; }
+  const aujourdhui = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  vue.innerHTML = `${ongletsBureau('heures')}
+    <p><a href="#heures">← Heures</a></p>
+    <h1>${h(e.nom)}</h1>
+    ${tuilesSoldes(e.soldes)}
+    <form class="carte" id="f-mouvement">
+      <h2 style="margin-top:0">Inscrire</h2>
+      <label>Banque<select name="type">${Object.entries(NOMS_BANQUES).map(([cle, nom]) => `<option value="${cle}">${nom}</option>`).join('')}</select></label>
+      <label>Quoi<select name="sens"><option value="-1">Congé pris (retire du solde)</option><option value="1">Solde de départ ou ajout</option></select></label>
+      <label>Heures<input name="heures" type="number" step="0.25" min="0.25" max="2000" required></label>
+      <label>Date<input name="date" type="date" value="${aujourdhui}" required></label>
+      <label>Note (facultatif)<input name="note" maxlength="300"></label>
+      <div class="actions"><button>Inscrire</button></div>
+    </form>
+    <form class="carte" id="f-taux">
+      <label>Taux de vacances de ${h(e.nom)} (%)<input name="taux_vacances" type="number" step="0.5" min="0" max="20"
+        value="${e.taux_vacances ?? ''}" placeholder="Par défaut : ${regles.tauxVacances}"></label>
+      <p class="doux">Ex. 6 % après 3 ans de service. Laisse vide pour le taux par défaut.</p>
+      <div class="actions"><button class="secondaire">Enregistrer le taux</button></div>
+    </form>
+    <h2>Historique</h2>
+    <div class="carte"><ul class="liste">${mouvements.map((m) => `
+      <li><div class="infos"><strong>${NOMS_BANQUES[m.type]} ${m.heures > 0 ? '+' : ''}${heuresDec(m.heures)}</strong>
+        <div class="doux">${m.date}${m.note ? ` · ${h(m.note)}` : ''}${m.par ? ` · par ${h(m.par)}` : ''}</div></div>
+        <button class="lien" type="button" data-annuler-mvt="${m.id}">Annuler</button></li>`).join('')
+      || '<li class="vide">Rien d\'inscrit. Commence par les soldes de départ (vacances déjà accumulées, banque, etc.).</li>'}</ul></div>`;
+
+  const form = document.getElementById('f-mouvement');
+  form.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const d = lireFormulaire(form);
+    occuper(form.querySelector('button'), async () => {
+      await api('/api/bureau/mouvements', { method: 'POST', json: {
+        employe_id: employeId, type: d.type, heures: Number(d.sens) * Number(d.heures), date: d.date, note: d.note } });
+      avis('Inscrit.');
+      route();
+    });
+  });
+  const formTaux = document.getElementById('f-taux');
+  formTaux.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    occuper(formTaux.querySelector('button'), async () => {
+      await api(`/api/bureau/soldes/${employeId}`, { method: 'PATCH', json: { taux_vacances: formTaux.taux_vacances.value } });
+      avis('Taux enregistré.');
+      route();
+    });
+  });
+  vue.onclick = (ev) => {
+    const b = ev.target.closest('[data-annuler-mvt]');
+    if (!b || !confirm('Annuler cette inscription ?')) return;
+    occuper(b, async () => {
+      await api(`/api/bureau/mouvements/${b.dataset.annulerMvt}`, { method: 'DELETE' });
+      route();
     });
   };
 }
