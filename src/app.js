@@ -9,6 +9,7 @@ import {
 } from './auth.js';
 import { lireReglage, ecrireReglage } from './db.js';
 import { ErreurQbo } from './quickbooks.js';
+import { brancherProjets } from './projets.js';
 
 const TYPES_ACCEPTES = {
   'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'application/pdf': 'pdf',
@@ -333,12 +334,14 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
     res.json({ ok: true });
   });
 
+  brancherProjets(app, { db, dossierFichiers });
+
   app.use('/api', (_req, res) => res.status(404).json({ erreur: 'Adresse inconnue.' }));
 
   // eslint-disable-next-line no-unused-vars
   app.use((err, _req, res, _next) => {
     if (err instanceof ErreurQbo) return res.status(502).json({ erreur: `QuickBooks : ${err.message}` });
-    if (err instanceof multer.MulterError) return res.status(400).json({ erreur: 'Fichier trop gros (15 Mo max).' });
+    if (err instanceof multer.MulterError) return res.status(400).json({ erreur: 'Fichier trop gros (15 Mo max pour une photo ou une facture, 25 Mo pour un document).' });
     console.error(err);
     res.status(500).json({ erreur: 'Erreur inattendue. Réessaie.' });
   });

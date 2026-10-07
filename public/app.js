@@ -71,6 +71,8 @@ function route() {
   if (etat.premierDemarrage) return vuePremierCompte();
   if (!u) return vueConnexion();
   if (ancre.startsWith('facture/')) return vueEditionFacture(Number(ancre.split('/')[1]));
+  if (ancre === 'projets' || ancre === 'projets/archives') return vueProjets(ancre === 'projets/archives');
+  if (ancre.startsWith('projet/')) return vueProjet(Number(ancre.split('/')[1]), ancre.split('/')[2]);
   if (u.role === 'bureau') {
     if (requete?.includes('qbo=ok')) avis('QuickBooks est connecté.');
     if (requete?.includes('qbo=echec')) avis('La connexion à QuickBooks a échoué. Réessaie.');
@@ -140,11 +142,13 @@ function vuePremierCompte() {
 
 // ---------- Employé ----------
 function ongletsBureau(actif) {
-  if (etat.utilisateur.role !== 'bureau') return '';
   const lien = (ancre, texte) => `<a href="#${ancre}" ${actif === ancre ? 'aria-current="page"' : ''}>${texte}</a>`;
+  if (etat.utilisateur.role !== 'bureau') {
+    return `<nav class="onglets">${lien('factures', 'Mes factures')}${lien('projets', 'Projets')}</nav>`;
+  }
   return `<nav class="onglets">
     ${lien('bureau/en_attente', 'À approuver')}${lien('bureau/approuvee', 'Approuvées')}
-    ${lien('bureau/refusee', 'Refusées')}${lien('factures', 'Déposer')}${lien('employes', 'Employés')}
+    ${lien('bureau/refusee', 'Refusées')}${lien('factures', 'Déposer')}${lien('projets', 'Projets')}${lien('employes', 'Employés')}
   </nav>`;
 }
 
@@ -438,6 +442,343 @@ function brancherApprobation(f) {
       carte.remove();
     });
   });
+}
+
+// ---------- Projets ----------
+const heure = (d) => new Date(`${d.replace(' ', 'T')}Z`).toLocaleString('fr-CA', {
+  day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+});
+
+async function vueProjets(archives) {
+  const bureau = etat.utilisateur.role === 'bureau';
+  vue.innerHTML = `${ongletsBureau('projets')}<div id="contenu"><p class="vide">Chargement…</p></div>`;
+  const { projets } = await api(`/api/projets${archives ? '?archives=1' : ''}`);
+  const contenu = document.getElementById('contenu');
+  if (!contenu) return;
+  contenu.innerHTML = `
+    ${archives ? '<p><a href="#projets">← Projets en cours</a></p>' : ''}
+    <div class="carte"><ul class="liste">${projets.length ? projets.map((p) => `
+      <li>
+        <div class="infos"><a href="#projet/${p.id}"><strong>${h(p.nom)}</strong></a>
+          <div class="doux">${p.adresse ? `${h(p.adresse)} · ` : ''}${p.nb_messages} message(s) · ${p.nb_photos} photo(s) · ${p.nb_documents} document(s)</div></div>
+        <a class="bouton secondaire" href="#projet/${p.id}">Ouvrir</a>
+      </li>`).join('') : `<li class="vide">${archives ? 'Aucun projet archivé.' : 'Aucun projet en cours.'}</li>`}</ul></div>
+    ${bureau && !archives ? `
+    <h2>Nouveau projet</h2>
+    <form class="carte" id="f-projet">
+      <div class="grille2">
+        <div><label for="pn">Nom</label><input id="pn" name="nom" placeholder="Ex. : Toiture Tremblay" required></div>
+        <div><label for="pa">Adresse (facultatif)</label><input id="pa" name="adresse"></div>
+      </div>
+      <div class="actions"><button>Créer le projet</button></div>
+    </form>
+    <p><a href="#projets/archives">Voir les projets archivés</a></p>` : ''}`;
+
+  const form = document.getElementById('f-projet');
+  form?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    occuper(form.querySelector('button'), async () => {
+      const { projet } = await api('/api/projets', { method: 'POST', json: lireFormulaire(form) });
+      location.hash = `projet/${projet.id}`;
+    });
+  });
+}
+
+function bulleMessage(m, idProjet) {
+  const moi = etat.utilisateur;
+  const peutEffacer = m.auteur_id === moi.id || moi.role === 'bureau';
+  const photo = `/api/projets/${idProjet}/messages/${m.id}/photo`;
+  return `
+    <li class="message ${m.auteur_id === moi.id ? 'moi' : ''}" data-id="${m.id}">
+      <div class="doux"><strong>${h(m.auteur)}</strong> · ${heure(m.cree_le)}
+        ${peutEffacer ? `<button class="lien" type="button" data-effacer="${m.id}">Effacer</button>` : ''}</div>
+      ${m.photo ? `<a href="${photo}" target="_blank" rel="noopener"><img src="${photo}" alt="Photo du projet" loading="lazy"></a>` : ''}
+      ${m.texte ? `<div class="texte">${h(m.texte)}</div>` : ''}
+    </li>`;
+}
+
+const ONGLETS_PROJET = { discussion: 'Discussion', photos: 'Photos', documents: 'Documents', notes: 'Notes' };
+const taille = (o) => (o >= 1024 * 1024 ? `${(o / 1024 / 1024).toFixed(1).replace('.', ',')} Mo` : `${Math.max(1, Math.round(o / 1024))} Ko`);
+
+async function vueProjet(id, onglet) {
+  if (!ONGLETS_PROJET[onglet]) onglet = 'discussion';
+  const ancre = location.hash;
+  const { projet: p, messages } = await api(`/api/projets/${id}`);
+  const bureau = etat.utilisateur.role === 'bureau';
+  const moi = etat.utilisateur;
+
+  vue.innerHTML = `${ongletsBureau('projets')}
+    <p><a href="#projets">← Tous les projets</a></p>
+    <h1>${h(p.nom)}${p.actif ? '' : ' <span class="pastille s-brouillon">Archivé</span>'}</h1>
+    ${p.adresse ? `<p class="doux"><a href="https://maps.google.com/?q=${encodeURIComponent(p.adresse)}" target="_blank" rel="noopener">${h(p.adresse)}</a></p>` : ''}
+    <nav class="onglets">${Object.entries(ONGLETS_PROJET).map(([cle, nom]) =>
+      `<a href="#projet/${id}/${cle}" ${cle === onglet ? 'aria-current="page"' : ''}>${nom}</a>`).join('')}</nav>
+    <div id="contenu-projet"></div>
+    ${bureau ? `<div class="actions"><button class="${p.actif ? 'danger' : 'secondaire'}" type="button" id="btn-archiver">
+      ${p.actif ? 'Archiver le projet' : 'Réactiver le projet'}</button></div>` : ''}`;
+
+  document.getElementById('btn-archiver')?.addEventListener('click', (e) => {
+    if (p.actif && !confirm('Archiver ce projet ? Les employés ne le verront plus.')) return;
+    occuper(e.currentTarget, async () => {
+      await api(`/api/projets/${id}`, { method: 'PATCH', json: { actif: !p.actif } });
+      location.hash = 'projets';
+    });
+  });
+
+  const contenu = document.getElementById('contenu-projet');
+  if (onglet === 'notes') return ongletNotes(contenu, p);
+  if (onglet === 'photos' || onglet === 'documents') return ongletDossier(contenu, p, onglet, moi);
+  return ongletDiscussion(contenu, p, messages, ancre);
+}
+
+function ongletNotes(contenu, p) {
+  contenu.innerHTML = `
+    <form class="carte" id="f-notes">
+      <label for="notes">Notes du projet (visibles par toute l'équipe)</label>
+      <textarea id="notes" name="notes" rows="10" placeholder="Matériaux, mesures, codes de porte, contacts…">${h(p.notes)}</textarea>
+      <div class="actions"><button>Enregistrer les notes</button></div>
+    </form>`;
+  const form = document.getElementById('f-notes');
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    occuper(form.querySelector('button'), async () => {
+      await api(`/api/projets/${p.id}`, { method: 'PATCH', json: { notes: form.notes.value } });
+      avis('Notes enregistrées.');
+    });
+  });
+}
+
+async function ongletDossier(contenu, p, dossier, moi) {
+  const photos = dossier === 'photos';
+  contenu.innerHTML = `
+    ${p.actif ? `<input type="file" id="fichier-dossier" ${photos ? 'accept="image/*" multiple'
+      : 'accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,image/*" multiple'} hidden>
+    ${photos ? '' : '<button class="pleine" type="button" id="btn-scanner">Scanner un document</button><div style="height:8px"></div>'}
+    <button class="pleine ${photos ? '' : 'secondaire'}" type="button" id="btn-deposer">${photos ? 'Ajouter des photos' : 'Ajouter des fichiers'}</button>
+    <p class="doux" style="text-align:center">${photos ? 'Les photos envoyées dans la discussion apparaissent aussi ici.'
+      : 'PDF, Word, Excel, texte ou image, 25 Mo maximum par fichier.'}</p>` : ''}
+    <div id="liste-dossier"><p class="vide">Chargement…</p></div>`;
+
+  const afficher = async () => {
+    const { fichiers } = await api(`/api/projets/${p.id}/dossiers/${dossier}`);
+    const liste = document.getElementById('liste-dossier');
+    if (!liste) return;
+    const effacable = (f) => f.source !== 'discussion' && (f.auteur_id === moi.id || moi.role === 'bureau');
+    if (!fichiers.length) {
+      liste.innerHTML = `<div class="carte vide">${photos ? 'Aucune photo pour l\'instant.' : 'Aucun document pour l\'instant.'}</div>`;
+    } else if (photos) {
+      liste.innerHTML = `<div class="galerie">${fichiers.map((f) => `
+        <figure>
+          <a href="${f.url}" target="_blank" rel="noopener"><img src="${f.url}" alt="Photo du projet" loading="lazy"></a>
+          <figcaption class="doux">${h(f.auteur)} · ${heure(f.cree_le)}
+            ${effacable(f) ? `<button class="lien" type="button" data-effacer="${f.id}">Effacer</button>` : ''}</figcaption>
+        </figure>`).join('')}</div>`;
+    } else {
+      liste.innerHTML = `<div class="carte"><ul class="liste">${fichiers.map((f) => `
+        <li>
+          <div class="infos"><a href="${f.url}" target="_blank" rel="noopener"><strong>${h(f.nom_original || 'Document')}</strong></a>
+            <div class="doux">${h(f.auteur)} · ${heure(f.cree_le)} · ${taille(f.taille)}</div></div>
+          ${effacable(f) ? `<button class="danger" type="button" data-effacer="${f.id}">Effacer</button>` : ''}
+        </li>`).join('')}</ul></div>`;
+    }
+  };
+
+  const champ = document.getElementById('fichier-dossier');
+  const bouton = document.getElementById('btn-deposer');
+  bouton?.addEventListener('click', () => champ.click());
+  champ?.addEventListener('change', () => {
+    const choisis = [...champ.files];
+    if (!choisis.length) return;
+    occuper(bouton, async () => {
+      for (const [i, fichier] of choisis.entries()) {
+        bouton.textContent = `Envoi ${i + 1} de ${choisis.length}…`;
+        const donnees = new FormData();
+        donnees.append('fichier', photos ? await reduireImage(fichier) : fichier, fichier.name);
+        await api(`/api/projets/${p.id}/dossiers/${dossier}`, { method: 'POST', body: donnees });
+      }
+      avis(choisis.length > 1 ? `${choisis.length} fichiers ajoutés.` : 'Fichier ajouté.');
+      await afficher();
+    });
+    champ.value = '';
+  });
+
+  document.getElementById('btn-scanner')?.addEventListener('click', () => ecranScanner(contenu, p));
+
+  // onclick plutôt qu'un écouteur ajouté : l'onglet peut être réaffiché après le scanner.
+  contenu.onclick = (e) => {
+    const b = e.target.closest('[data-effacer]');
+    if (!b || !confirm('Effacer ce fichier ?')) return;
+    occuper(b, async () => {
+      await api(`/api/projets/${p.id}/fichiers/${b.dataset.effacer}`, { method: 'DELETE' });
+      await afficher();
+    });
+  };
+
+  await afficher();
+}
+
+// Prépare une page scannée : redimensionnée, et en noir et blanc contrasté pour qu'elle soit lisible une fois imprimée.
+async function preparerPage(fichier, noirEtBlanc) {
+  const image = await createImageBitmap(fichier);
+  const echelle = Math.min(1, 1800 / Math.max(image.width, image.height));
+  const toile = document.createElement('canvas');
+  toile.width = Math.round(image.width * echelle);
+  toile.height = Math.round(image.height * echelle);
+  const g = toile.getContext('2d');
+  g.drawImage(image, 0, 0, toile.width, toile.height);
+  if (noirEtBlanc) {
+    const pixels = g.getImageData(0, 0, toile.width, toile.height);
+    const d = pixels.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const gris = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      // Le papier tire vers le blanc et l'encre vers le noir.
+      const v = Math.max(0, Math.min(255, (gris - 128) * 1.8 + 165));
+      d[i] = d[i + 1] = d[i + 2] = v;
+    }
+    g.putImageData(pixels, 0, 0);
+  }
+  return new Promise((ok) => toile.toBlob(ok, 'image/jpeg', 0.8));
+}
+
+function ecranScanner(contenu, p) {
+  const pages = [];
+  const date = new Date().toLocaleDateString('fr-CA');
+  contenu.innerHTML = `
+    <div class="carte">
+      <h2 style="margin-top:0">Scanner un document</h2>
+      <p class="doux">Pose la feuille à plat dans un endroit éclairé et prends-la en photo d'aussi près que possible.
+        Ajoute autant de pages que nécessaire.</p>
+      <input type="file" id="page-scan" accept="image/*" capture="environment" hidden>
+      <button class="pleine" type="button" id="btn-page">Prendre la page 1 en photo</button>
+      <div class="galerie" id="pages-scan" style="margin-top:12px"></div>
+      <label for="nom-scan">Nom du document</label>
+      <input id="nom-scan" placeholder="Ex. : Permis de construction" value="Document scanné ${date}">
+      <label style="display:flex;gap:8px;align-items:center;color:var(--texte)">
+        <input type="checkbox" id="nb-scan" checked style="width:auto;min-height:0"> Noir et blanc (plus lisible)
+      </label>
+      <div class="actions">
+        <button type="button" id="btn-creer-pdf" disabled>Créer le PDF</button>
+        <button class="secondaire" type="button" id="btn-annuler-scan">Annuler</button>
+      </div>
+    </div>`;
+
+  const champ = document.getElementById('page-scan');
+  const boutonPage = document.getElementById('btn-page');
+  const apercus = document.getElementById('pages-scan');
+  const creer = document.getElementById('btn-creer-pdf');
+  const rafraichir = () => {
+    apercus.innerHTML = pages.map((pg, i) => `
+      <figure><img src="${pg.url}" alt="Page ${i + 1}">
+        <figcaption class="doux">Page ${i + 1} <button class="lien" type="button" data-retirer="${i}">Retirer</button></figcaption>
+      </figure>`).join('');
+    boutonPage.textContent = `Prendre la page ${pages.length + 1} en photo`;
+    creer.disabled = !pages.length;
+    creer.textContent = pages.length > 1 ? `Créer le PDF (${pages.length} pages)` : 'Créer le PDF';
+  };
+
+  boutonPage.addEventListener('click', () => champ.click());
+  champ.addEventListener('change', () => {
+    const fichier = champ.files[0];
+    champ.value = '';
+    if (!fichier) return;
+    occuper(boutonPage, async () => {
+      boutonPage.textContent = 'Préparation de la page…';
+      const blob = await preparerPage(fichier, document.getElementById('nb-scan').checked);
+      pages.push({ blob, url: URL.createObjectURL(blob) });
+    }).then(rafraichir);
+  });
+  apercus.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-retirer]');
+    if (!b) return;
+    URL.revokeObjectURL(pages[b.dataset.retirer].url);
+    pages.splice(Number(b.dataset.retirer), 1);
+    rafraichir();
+  });
+  document.getElementById('btn-annuler-scan').addEventListener('click', () => {
+    if (pages.length && !confirm('Abandonner les pages prises ?')) return;
+    ongletDossier(contenu, p, 'documents', etat.utilisateur);
+  });
+  creer.addEventListener('click', () => occuper(creer, async () => {
+    creer.textContent = 'Création du PDF…';
+    const donnees = new FormData();
+    donnees.append('nom', document.getElementById('nom-scan').value);
+    pages.forEach((pg, i) => donnees.append('pages', pg.blob, `page-${i + 1}.jpg`));
+    await api(`/api/projets/${p.id}/scanner`, { method: 'POST', body: donnees });
+    pages.forEach((pg) => URL.revokeObjectURL(pg.url));
+    avis('Document scanné ajouté.');
+    ongletDossier(contenu, p, 'documents', etat.utilisateur);
+  }));
+}
+
+function ongletDiscussion(contenu, p, messages, ancre) {
+  const id = p.id;
+  let dernier = messages.at(-1)?.id || 0;
+  contenu.innerHTML = `
+    <div class="carte"><ul class="liste fil" id="fil">${messages.map((m) => bulleMessage(m, id)).join('')
+      || '<li class="vide" id="fil-vide">Aucun message. Lance la discussion ou ajoute une photo.</li>'}</ul></div>
+    ${p.actif ? `
+    <form class="carte composer" id="f-message">
+      <input type="file" id="photo" accept="image/*" hidden>
+      <textarea name="texte" rows="2" placeholder="Écris un message…"></textarea>
+      <div class="doux" id="photo-choisie" hidden></div>
+      <div class="actions">
+        <button class="secondaire" type="button" id="btn-photo">Ajouter une photo</button>
+        <button>Envoyer</button>
+      </div>
+    </form>` : ''}`;
+
+  const fil = document.getElementById('fil');
+  const ajouter = (liste) => {
+    if (!liste.length) return;
+    document.getElementById('fil-vide')?.remove();
+    for (const m of liste) {
+      if (fil.querySelector(`[data-id="${m.id}"]`)) continue;
+      fil.insertAdjacentHTML('beforeend', bulleMessage(m, id));
+      dernier = Math.max(dernier, m.id);
+    }
+  };
+
+  const formMessage = document.getElementById('f-message');
+  if (formMessage) {
+    const champ = document.getElementById('photo');
+    const choisie = document.getElementById('photo-choisie');
+    document.getElementById('btn-photo').addEventListener('click', () => champ.click());
+    champ.addEventListener('change', () => {
+      choisie.hidden = !champ.files[0];
+      choisie.textContent = champ.files[0] ? `Photo prête à envoyer : ${champ.files[0].name}` : '';
+    });
+    formMessage.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const texte = formMessage.texte.value.trim();
+      if (!texte && !champ.files[0]) { avis('Écris un message ou ajoute une photo.'); return; }
+      occuper(formMessage.querySelector('button:not([type])'), async () => {
+        const donnees = new FormData();
+        donnees.append('texte', texte);
+        if (champ.files[0]) donnees.append('photo', await reduireImage(champ.files[0]));
+        const { message } = await api(`/api/projets/${id}/messages`, { method: 'POST', body: donnees });
+        ajouter([message]);
+        formMessage.reset();
+        choisie.hidden = true;
+        fil.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      });
+    });
+  }
+
+  fil.addEventListener('click', (e) => {
+    const bouton = e.target.closest('[data-effacer]');
+    if (!bouton || !confirm('Effacer ce message ?')) return;
+    occuper(bouton, async () => {
+      await api(`/api/projets/${id}/messages/${bouton.dataset.effacer}`, { method: 'DELETE' });
+      bouton.closest('li').remove();
+    });
+  });
+
+  // Nouveaux messages des collègues : vérifiés toutes les 10 secondes tant que la discussion est ouverte.
+  const minuterie = setInterval(async () => {
+    if (location.hash !== ancre || !document.body.contains(fil)) { clearInterval(minuterie); return; }
+    if (document.hidden) return;
+    try { ajouter((await api(`/api/projets/${id}?apres=${dernier}`)).messages); } catch { /* réseau : on réessaie */ }
+  }, 10000);
 }
 
 async function vueEmployes() {
