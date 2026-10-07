@@ -148,3 +148,7 @@ button.diner { min-height: 36px; padding: 4px 12px; margin: 6px 0 2px; font-size
 button.diner.paye { background: var(--succes); border: 1px solid var(--succes); color: #fff; }
 .liste li.employe { flex-wrap: wrap; gap: 8px; }
 .liste li.employe .infos { flex-basis: 100%; }
+.sous-onglets { display: flex; flex-wrap: wrap; gap: 4px; margin: -8px 0 16px; }
+.sous-onglets a { padding: 6px 9px; border-radius: 999px; border: 1px solid var(--bord); color: var(--doux);
+  text-decoration: none; white-space: nowrap; font-size: 13px; }
+.sous-onglets a[aria-current="page"] { background: var(--accent); border-color: var(--accent); color: var(--accent-texte); font-weight: 600; }
