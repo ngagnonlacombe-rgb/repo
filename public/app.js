@@ -159,11 +159,18 @@ function ongletsBureau(actif) {
   if (etat.utilisateur.role !== 'bureau') {
     return `<nav class="onglets">${lien('punch', 'Punch')}${lien('factures', 'Mes factures')}${lien('projets', 'Projets')}${messages}</nav>`;
   }
+  // Bureau : 4 grands onglets ; Factures et Employés ont leurs sous-onglets juste en dessous.
+  const groupe = Object.keys(SOUS_ONGLETS).find((g) => SOUS_ONGLETS[g].some(([ancre]) => ancre === actif));
+  const principal = (g, ancre, texte) => `<a href="#${ancre}" ${groupe === g || actif === g ? 'aria-current="page"' : ''}>${texte}</a>`;
   return `<nav class="onglets">
-    ${lien('bureau/en_attente', 'À approuver')}${messages}${lien('bureau/approuvee', 'Approuvées')}
-    ${lien('bureau/refusee', 'Refusées')}${lien('factures', 'Déposer')}${lien('heures', 'Heures')}${lien('projets', 'Projets')}${lien('employes', 'Employés')}
-  </nav>`;
+    ${principal('factures', 'bureau/en_attente', 'Factures')}${messages}${principal('employes', 'heures', 'Employés')}${lien('projets', 'Projets')}
+  </nav>${groupe ? `<nav class="sous-onglets">${SOUS_ONGLETS[groupe].map(([ancre, texte]) => lien(ancre, texte)).join('')}</nav>` : ''}`;
 }
+
+const SOUS_ONGLETS = {
+  factures: [['bureau/en_attente', 'À approuver'], ['bureau/approuvee', 'Approuvées'], ['bureau/refusee', 'Refusées'], ['factures', 'Déposer']],
+  employes: [['heures', 'Heures'], ['employes', 'Comptes']],
+};
 
 // Pastille des messages non lus dans le menu, rafraîchie à chaque écran et chaque minute.
 async function majNonLus() {
