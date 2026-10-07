@@ -164,6 +164,10 @@ export function ouvrirBase(fichier) {
   if (!db.prepare('PRAGMA table_info(utilisateurs)').all().some((c) => c.name === 'chef_projet')) {
     db.exec('ALTER TABLE utilisateurs ADD COLUMN chef_projet INTEGER NOT NULL DEFAULT 0');
   }
+  // Lien de partage du plan magicplan d'un projet.
+  if (!db.prepare('PRAGMA table_info(projets)').all().some((c) => c.name === 'magicplan_url')) {
+    db.exec('ALTER TABLE projets ADD COLUMN magicplan_url TEXT');
+  }
   // Bases déjà en service : une photo (déposée ou envoyée dans la discussion) peut être rangée dans un sous-dossier.
   for (const table of ['projet_fichiers', 'projet_messages']) {
     const colonnes = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);

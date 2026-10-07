@@ -538,16 +538,30 @@ async function vueProjet(id, onglet, albumId = 0) {
   const { projet: p, messages } = await api(`/api/projets/${id}`);
   const bureau = etat.utilisateur.role === 'bureau';
   const moi = etat.utilisateur;
+  const peutPlan = bureau || Boolean(moi.chef_projet);
 
   vue.innerHTML = `${ongletsBureau('projets')}
     <p><a href="#projets">← Tous les projets</a></p>
     <h1>${h(p.nom)}${p.actif ? '' : ' <span class="pastille s-brouillon">Archivé</span>'}</h1>
     ${p.adresse ? `<p class="doux"><a href="https://maps.google.com/?q=${encodeURIComponent(p.adresse)}" target="_blank" rel="noopener">${h(p.adresse)}</a></p>` : ''}
+    <div class="plan-projet">
+      ${p.magicplan_url ? `<a class="bouton secondaire" href="${h(p.magicplan_url)}" target="_blank" rel="noopener">📐 Voir le plan magicplan</a>` : ''}
+      ${peutPlan ? `<button class="lien" type="button" id="btn-plan">${p.magicplan_url ? 'Changer le lien' : '📐 Ajouter le plan magicplan'}</button>` : ''}
+    </div>
     <nav class="onglets">${Object.entries(ONGLETS_PROJET).map(([cle, nom]) =>
       `<a href="#projet/${id}/${cle}" ${cle === onglet ? 'aria-current="page"' : ''}>${nom}</a>`).join('')}</nav>
     <div id="contenu-projet"></div>
     ${bureau ? `<div class="actions"><button class="${p.actif ? 'danger' : 'secondaire'}" type="button" id="btn-archiver">
       ${p.actif ? 'Archiver le projet' : 'Réactiver le projet'}</button></div>` : ''}`;
+
+  document.getElementById('btn-plan')?.addEventListener('click', (e) => {
+    const lien = prompt('Dans magicplan, ouvre le projet, touche Partager, copie le lien puis colle-le ici.\n(Laisse vide pour retirer le plan.)', p.magicplan_url || '');
+    if (lien === null) return;
+    occuper(e.currentTarget, async () => {
+      await api(`/api/projets/${id}`, { method: 'PATCH', json: { magicplan_url: lien } });
+      route();
+    });
+  });
 
   document.getElementById('btn-archiver')?.addEventListener('click', (e) => {
     if (p.actif && !confirm('Archiver ce projet ? Les employés ne le verront plus.')) return;

@@ -27,6 +27,17 @@ const texte = (v, max) => {
   return t ? t.slice(0, max) : null;
 };
 
+// Lien de partage magicplan : une adresse https, rien d'autre (on l'ouvre dans un nouvel onglet).
+// Le partage depuis le téléphone colle parfois une phrase autour du lien : on garde le lien seul.
+const lienPlan = (v) => {
+  const t = texte(v, 1000);
+  if (!t) return null;
+  try {
+    const u = new URL(t.match(/https:\/\/\S+/)?.[0] ?? t);
+    return u.protocol === 'https:' ? u.href : undefined;
+  } catch { return undefined; }
+};
+
 export function brancherProjets(app, { db, dossierFichiers }) {
   const dossier = path.join(dossierFichiers, 'projets');
   fs.mkdirSync(dossier, { recursive: true });
@@ -72,7 +83,8 @@ export function brancherProjets(app, { db, dossierFichiers }) {
     res.status(201).json({ projet: projet(Number(lastInsertRowid)) });
   });
 
-  // Tout le monde peut mettre les notes à jour ; le nom, l'adresse et l'archivage relèvent du bureau.
+  // Tout le monde peut mettre les notes à jour ; le nom, l'adresse et l'archivage relèvent du bureau ;
+  // le lien du plan magicplan, du bureau et des chargés de projet.
   app.patch('/api/projets/:id', exigerConnexion, (req, res) => {
     const p = projet(Number(req.params.id));
     if (!visible(p, req.utilisateur)) return res.status(404).json({ erreur: 'Projet introuvable.' });
@@ -81,12 +93,18 @@ export function brancherProjets(app, { db, dossierFichiers }) {
     if (!bureau && ['nom', 'adresse', 'actif'].some((c) => c in b)) {
       return res.status(403).json({ erreur: 'Seul le bureau peut modifier ce projet.' });
     }
+    if ('magicplan_url' in b && !bureau && !req.utilisateur.chef_projet) {
+      return res.status(403).json({ erreur: 'Seuls le bureau et les chargés de projet peuvent changer le plan.' });
+    }
     if ('nom' in b && !texte(b.nom, 120)) return res.status(400).json({ erreur: 'Donne un nom au projet.' });
-    db.prepare(`UPDATE projets SET nom = ?, adresse = ?, notes = ?, actif = ?, maj_le = datetime('now') WHERE id = ?`).run(
+    const plan = 'magicplan_url' in b ? lienPlan(b.magicplan_url) : p.magicplan_url;
+    if (plan === undefined) return res.status(400).json({ erreur: 'Colle le lien de partage magicplan (il commence par https://).' });
+    db.prepare(`UPDATE projets SET nom = ?, adresse = ?, notes = ?, actif = ?, magicplan_url = ?, maj_le = datetime('now') WHERE id = ?`).run(
       'nom' in b ? texte(b.nom, 120) : p.nom,
       'adresse' in b ? texte(b.adresse, 200) : p.adresse,
       'notes' in b ? texte(b.notes, 20000) : p.notes,
       'actif' in b ? (b.actif ? 1 : 0) : p.actif,
+      plan,
       p.id,
     );
     res.json({ projet: projet(p.id) });
