@@ -1191,7 +1191,8 @@ const NOMS_BANQUES = {
   banque: 'Temps accumulé', absence: 'Absence', conge_perso: 'Congé personnel', ferie: 'Férié',
   maladie: 'Maladie', maladie_np: 'Maladie (non payé)', vacances: 'Vacances',
 };
-const tuilesSoldes = (s) => `<div class="soldes">${Object.entries(NOMS_BANQUES).map(([cle, nom]) => `
+// Seules les banques reçues s'affichent : l'employé n'en reçoit que trois, le bureau toutes.
+const tuilesSoldes = (s) => `<div class="soldes">${Object.entries(NOMS_BANQUES).filter(([cle]) => cle in s).map(([cle, nom]) => `
   <div class="solde ${s[cle] < 0 ? 'negatif' : ''}"><span class="doux">${nom}</span><strong>${heuresDec(s[cle])}</strong></div>`).join('')}</div>`;
 
 async function vuePunch() {
