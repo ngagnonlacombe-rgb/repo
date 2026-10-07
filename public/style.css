@@ -117,3 +117,16 @@ a.bouton.secondaire { background: transparent; color: var(--accent-lien); }
 .compteur { display: inline-block; min-width: 20px; padding: 1px 6px; margin-left: 4px; border-radius: 10px;
   background: var(--danger); color: #fff; font-size: 12px; font-weight: 700; text-align: center; line-height: 18px; }
 .compteur[hidden] { display: none; }
+.punch { text-align: center; }
+.punch .chrono { font-size: 44px; font-weight: 700; margin: 6px 0; font-variant-numeric: tabular-nums; }
+.punch.en-quart { border-color: var(--succes); border-width: 2px; }
+.geant.succes { background: var(--succes); border-color: var(--succes); color: #fff; }
+.geant.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+#note-quart { width: 100%; margin-bottom: 10px; }
+.semaine { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; text-align: center; }
+.heures-employe summary { display: flex; justify-content: space-between; cursor: pointer; font-size: 17px; list-style: none; }
+.heures-employe summary::-webkit-details-marker { display: none; }
+.heures-employe summary span { font-weight: 700; }
+.heures-employe[open] summary { margin-bottom: 8px; }
+.correction label { display: block; margin-bottom: 8px; }
+.correction input { width: 100%; }

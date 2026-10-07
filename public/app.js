@@ -81,10 +81,12 @@ function route() {
     if (requete?.includes('qbo=echec')) avis('La connexion à QuickBooks a échoué. Réessaie.');
     if (ancre === 'factures') return vueEmploye();
     if (ancre === 'employes') return vueEmployes();
+    if (ancre === 'heures' || ancre.startsWith('heures/')) return vueHeures(ancre.split('/')[1]);
     if (ancre.startsWith('bureau/')) return vueBureau(ancre.split('/')[1]);
     return vueBureau('en_attente');
   }
-  return vueEmploye();
+  if (ancre === 'factures') return vueEmploye();
+  return vuePunch();
 }
 
 document.getElementById('btn-deconnexion').addEventListener('click', async () => {
@@ -154,11 +156,11 @@ function ongletsBureau(actif) {
     majNonLus();
   });
   if (etat.utilisateur.role !== 'bureau') {
-    return `<nav class="onglets">${lien('factures', 'Mes factures')}${lien('projets', 'Projets')}${messages}</nav>`;
+    return `<nav class="onglets">${lien('punch', 'Punch')}${lien('factures', 'Mes factures')}${lien('projets', 'Projets')}${messages}</nav>`;
   }
   return `<nav class="onglets">
     ${lien('bureau/en_attente', 'À approuver')}${messages}${lien('bureau/approuvee', 'Approuvées')}
-    ${lien('bureau/refusee', 'Refusées')}${lien('factures', 'Déposer')}${lien('projets', 'Projets')}${lien('employes', 'Employés')}
+    ${lien('bureau/refusee', 'Refusées')}${lien('factures', 'Déposer')}${lien('heures', 'Heures')}${lien('projets', 'Projets')}${lien('employes', 'Employés')}
   </nav>`;
 }
 
@@ -1129,6 +1131,148 @@ async function vueMessagerie(employeId) {
     if (document.hidden) return;
     try { ajouter((await api(`${chemin}?apres=${dernier}`)).messages); } catch { /* réseau : on réessaie */ }
   }, 10000);
+}
+
+// ---------- Punch ----------
+const dateSql = (t) => new Date(`${t.replace(' ', 'T')}Z`);
+const heureCourte = (t) => dateSql(t).toLocaleTimeString('fr-CA', { hour: '2-digit', minute: '2-digit' });
+const jourCourt = (t) => dateSql(t).toLocaleDateString('fr-CA', { weekday: 'short', day: 'numeric', month: 'short' });
+const duree = (ms) => {
+  const minutes = Math.max(0, Math.floor(ms / 60000));
+  return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')}`;
+};
+const dureeQuart = (p, maintenant) => (p.fin ? dateSql(p.fin) : maintenant) - dateSql(p.debut);
+// Lundi 0 h (heure locale) de la semaine qui contient la date.
+function lundi(d) {
+  const l = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  l.setDate(l.getDate() - ((l.getDay() + 6) % 7));
+  return l;
+}
+
+async function vuePunch() {
+  const ancre = location.hash || '#punch';
+  const { enCours, recents } = await api('/api/punch');
+  const debutSemaine = lundi(new Date());
+  const cetteSemaine = recents.filter((p) => dateSql(p.debut) >= debutSemaine);
+  vue.innerHTML = `${ongletsBureau('punch')}
+    <div class="carte punch ${enCours ? 'en-quart' : ''}">
+      <div class="doux">${enCours ? `En quart depuis ${heureCourte(enCours.debut)}` : 'Tu n\'es pas en quart.'}</div>
+      <div class="chrono" id="chrono">${enCours ? duree(Date.now() - dateSql(enCours.debut)) : '—'}</div>
+      ${enCours?.note ? `<div class="doux">${h(enCours.note)}</div>` : ''}
+    </div>
+    ${enCours ? '' : '<input id="note-quart" placeholder="Chantier ou note (facultatif)" maxlength="500">'}
+    <button class="geant ${enCours ? 'danger' : 'succes'}" type="button" id="btn-punch">${enCours ? 'Terminer mon quart' : 'Commencer mon quart'}</button>
+    <h2>Cette semaine : ${duree(cetteSemaine.reduce((t, p) => t + dureeQuart(p, Date.now()), 0))}</h2>
+    <div class="carte"><ul class="liste">${recents.slice(0, 14).map((p) => `
+      <li><div class="infos"><strong>${jourCourt(p.debut)}</strong>
+        <div class="doux">${heureCourte(p.debut)} à ${p.fin ? heureCourte(p.fin) : 'en cours'}${p.note ? ` · ${h(p.note)}` : ''}</div></div>
+        <strong>${duree(dureeQuart(p, Date.now()))}</strong></li>`).join('') || '<li class="vide">Aucun quart pour l\'instant.</li>'}</ul></div>
+    <p class="doux">Un oubli ou une erreur ? Écris au bureau dans Messages, il peut corriger tes heures.</p>`;
+
+  const bouton = document.getElementById('btn-punch');
+  bouton.addEventListener('click', () => {
+    if (enCours && !confirm('Terminer ton quart maintenant ?')) return;
+    occuper(bouton, async () => {
+      if (enCours) await api('/api/punch/fin', { method: 'POST' });
+      else await api('/api/punch/debut', { method: 'POST', json: { note: document.getElementById('note-quart').value } });
+      avis(enCours ? 'Quart terminé. Bon retour !' : 'Quart commencé. Bonne journée !');
+      route();
+    });
+  });
+
+  if (enCours) {
+    const minuterie = setInterval(() => {
+      const chrono = document.getElementById('chrono');
+      if (!chrono || (location.hash || '#punch') !== ancre) { clearInterval(minuterie); return; }
+      chrono.textContent = duree(Date.now() - dateSql(enCours.debut));
+    }, 30000);
+  }
+}
+
+// Valeur pour <input type="datetime-local"> à l'heure locale.
+const versChamp = (t) => {
+  const d = dateSql(t);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+};
+const depuisChamp = (v) => (v ? new Date(v).toISOString() : '');
+
+async function vueHeures(semaineChoisie) {
+  const debut = lundi(semaineChoisie ? new Date(`${semaineChoisie}T12:00:00`) : new Date());
+  const fin = new Date(debut);
+  fin.setDate(fin.getDate() + 7);
+  const cle = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const precedente = new Date(debut);
+  precedente.setDate(precedente.getDate() - 7);
+  const periode = `du=${encodeURIComponent(debut.toISOString())}&au=${encodeURIComponent(fin.toISOString())}`;
+  const { employes, punchs } = await api(`/api/bureau/heures?${periode}`);
+  const maintenant = Date.now();
+  const titre = `${debut.toLocaleDateString('fr-CA', { day: 'numeric', month: 'long' })} au ${
+    new Date(fin - 86400000).toLocaleDateString('fr-CA', { day: 'numeric', month: 'long', year: 'numeric' })}`;
+  const enQuart = punchs.filter((p) => !p.fin);
+
+  vue.innerHTML = `${ongletsBureau('heures')}
+    <div class="semaine">
+      <a class="bouton secondaire" href="#heures/${cle(precedente)}">←</a>
+      <strong>${titre}</strong>
+      ${fin <= new Date() ? `<a class="bouton secondaire" href="#heures/${cle(fin)}">→</a>` : '<span></span>'}
+    </div>
+    ${enQuart.length ? `<div class="carte">En quart maintenant : ${enQuart.map((p) =>
+      `<strong>${h(employes.find((e) => e.id === p.employe_id)?.nom)}</strong> depuis ${heureCourte(p.debut)}`).join(', ')}</div>` : ''}
+    <div class="actions"><a class="bouton secondaire" href="/api/bureau/heures.csv?${periode}" download>Exporter pour la paie (Excel)</a></div>
+    ${employes.map((e) => {
+      const siens = punchs.filter((p) => p.employe_id === e.id);
+      return `<details class="carte heures-employe" ${siens.length ? '' : ''}>
+        <summary><strong>${h(e.nom)}</strong><span>${duree(siens.reduce((t, p) => t + dureeQuart(p, maintenant), 0))}</span></summary>
+        <ul class="liste">${siens.map((p) => `
+          <li class="quart" data-id="${p.id}">
+            <div class="infos"><strong>${jourCourt(p.debut)}</strong> · ${heureCourte(p.debut)} à ${p.fin ? heureCourte(p.fin) : 'en cours'}
+              <div class="doux">${duree(dureeQuart(p, maintenant))}${p.note ? ` · ${h(p.note)}` : ''}${p.modifie_par ? ` · corrigé par ${h(p.modifie_par)}` : ''}</div></div>
+            <button class="lien" type="button" data-corriger="${p.id}">Corriger</button>
+          </li>`).join('') || '<li class="vide">Aucun quart cette semaine.</li>'}</ul>
+        <button class="secondaire" type="button" data-ajouter="${e.id}">Ajouter un quart oublié</button>
+      </details>`;
+    }).join('') || '<div class="carte vide">Aucun employé pour l\'instant.</div>'}`;
+
+  const formulaire = (p, employeId) => `
+    <form class="carte correction">
+      <label>Début<input type="datetime-local" name="debut" value="${p ? versChamp(p.debut) : ''}" required></label>
+      <label>Fin<input type="datetime-local" name="fin" value="${p?.fin ? versChamp(p.fin) : ''}" ${p ? '' : 'required'}></label>
+      <div class="actions">
+        <button>Enregistrer</button>
+        <button class="secondaire" type="button" data-annuler>Annuler</button>
+        ${p ? '<button class="danger" type="button" data-supprimer>Supprimer</button>' : ''}
+      </div>
+    </form>`;
+
+  vue.onclick = (e) => {
+    const corriger = e.target.closest('[data-corriger]');
+    const ajouter = e.target.closest('[data-ajouter]');
+    if (!corriger && !ajouter) return;
+    vue.querySelector('form.correction')?.remove();
+    const p = corriger && punchs.find((x) => x.id === Number(corriger.dataset.corriger));
+    const ancrage = corriger ? corriger.closest('li') : ajouter;
+    ancrage.insertAdjacentHTML('afterend', formulaire(p));
+    const form = vue.querySelector('form.correction');
+    form.querySelector('[data-annuler]').onclick = () => form.remove();
+    form.querySelector('[data-supprimer]')?.addEventListener('click', (ev) => {
+      if (!confirm('Supprimer ce quart ?')) return;
+      occuper(ev.currentTarget, async () => {
+        await api(`/api/bureau/punchs/${p.id}`, { method: 'DELETE' });
+        avis('Quart supprimé.');
+        route();
+      });
+    });
+    form.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      occuper(form.querySelector('button:not([type])'), async () => {
+        const json = { debut: depuisChamp(form.debut.value), fin: depuisChamp(form.fin.value) || null };
+        if (p) await api(`/api/bureau/punchs/${p.id}`, { method: 'PATCH', json });
+        else await api('/api/bureau/punchs', { method: 'POST', json: { ...json, employe_id: Number(ajouter.dataset.ajouter) } });
+        avis('Heures enregistrées.');
+        route();
+      });
+    });
+  };
 }
 
 async function vueEmployes() {

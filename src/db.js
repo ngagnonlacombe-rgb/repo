@@ -117,6 +117,19 @@ export function ouvrirBase(fichier) {
       cree_le TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    -- Punchs : début et fin de quart (UTC). Un seul quart ouvert (fin NULL) par employé.
+    CREATE TABLE IF NOT EXISTS punchs (
+      id INTEGER PRIMARY KEY,
+      employe_id INTEGER NOT NULL REFERENCES utilisateurs(id) ON DELETE CASCADE,
+      debut TEXT NOT NULL,
+      fin TEXT,
+      note TEXT,
+      modifie_par INTEGER REFERENCES utilisateurs(id),
+      cree_le TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS punchs_employe ON punchs (employe_id, debut);
+    CREATE UNIQUE INDEX IF NOT EXISTS punchs_un_seul_ouvert ON punchs (employe_id) WHERE fin IS NULL;
+
     CREATE TABLE IF NOT EXISTS reglages (
       cle TEXT PRIMARY KEY,
       valeur TEXT NOT NULL
