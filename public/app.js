@@ -123,6 +123,8 @@ function vuePremierCompte() {
       <input id="identifiant" name="identifiant" autocomplete="username" autocapitalize="none" required>
       <label for="mdp">Mot de passe (10 caractères minimum)</label>
       <input id="mdp" name="motDePasse" type="password" autocomplete="new-password" minlength="10" required>
+      ${etat.codeInstallationRequis ? `<label for="code">Code d'installation</label>
+      <input id="code" name="code" type="password" autocomplete="off" required>` : ''}
       <div class="actions"><button class="pleine">Créer le compte</button></div>
     </form>`;
   const form = document.getElementById('f-premier');

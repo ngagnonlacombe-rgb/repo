@@ -23,7 +23,7 @@ Sans aucune clé, QuickBooks est simulé et la lecture automatique est désactiv
 ```bash
 npm install
 npm start          # http://localhost:3000
-npm test           # 19 tests (parcours complet, QuickBooks, lecture)
+npm test           # 20 tests (parcours complet, QuickBooks, lecture, installation)
 ```
 
 Au premier démarrage, l'app demande de créer le compte du bureau.
@@ -40,9 +40,20 @@ Toutes les clés vont dans le fichier `.env` du serveur (voir `.env.example`), j
 
 La facture est créée dans QuickBooks avec le montant avant taxes et le code de taxe choisi (par défaut celui qui contient « TVQ »). QuickBooks calcule la TPS et la TVQ lui-même, comme lors d'une saisie manuelle. L'écran d'approbation avertit si avant taxes + TPS + TVQ ne correspond pas au total lu sur la facture.
 
-## Hébergement
+## Mise en ligne (Fly.io, Toronto)
 
-Un seul petit serveur Node.js (version 22.5 ou plus) avec un disque persistant pour `DOSSIER_DONNEES` (base SQLite et photos). Le `Dockerfile` fonctionne chez la plupart des hébergeurs. Choisir une région au Canada (par exemple Toronto ou Montréal) pour la Loi 25, et un domaine en HTTPS (obligatoire pour QuickBooks).
+Chaque changement sur `main` lance les tests puis déploie l'app sur Fly.io (`.github/workflows/deployer.yml`, configuration dans `fly.toml`). Un seul petit serveur à Toronto, avec un disque de 1 Go pour la base et les photos. La machine s'endort quand personne ne s'en sert.
+
+Pour l'activer, une seule fois :
+
+1. Crée un compte sur fly.io.
+2. Dans le tableau de bord Fly.io, menu **Tokens**, crée un jeton d'organisation et copie-le au complet (il commence par `FlyV1 `).
+3. Sur GitHub, dans **Settings > Secrets and variables > Actions**, ajoute deux secrets :
+   - `FLY_API_TOKEN` : le jeton copié à l'étape 2.
+   - `CODE_INSTALLATION` : un mot de passe de ton choix, demandé une seule fois pour créer le compte du bureau.
+4. Dans l'onglet **Actions** du dépôt, relance « Tests et déploiement ». L'app sera à `https://app-employes-ngl.fly.dev`.
+
+Au premier déploiement, le flux crée l'app, le disque et la clé de chiffrement des jetons QuickBooks. Les clés QuickBooks et Anthropic s'ajoutent ensuite comme secrets Fly.io.
 
 ## Organisation du code
 

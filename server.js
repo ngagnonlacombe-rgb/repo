@@ -9,6 +9,10 @@ const ici = path.dirname(fileURLToPath(import.meta.url));
 const dossierDonnees = process.env.DOSSIER_DONNEES || path.join(ici, 'donnees');
 const production = process.env.NODE_ENV === 'production';
 
+if (production && !process.env.CODE_INSTALLATION) {
+  console.error('CODE_INSTALLATION est requis en production pour protéger la création du compte du bureau.');
+  process.exit(1);
+}
 if (process.env.QBO_CLIENT_ID && !process.env.CLE_SECRETE) {
   console.error('CLE_SECRETE est requise pour protéger les jetons QuickBooks.');
   process.exit(1);
@@ -26,6 +30,7 @@ const lecteur = creerLecteur();
 
 const app = creerApp({
   db, qbo, lecteur, production,
+  codeInstallation: process.env.CODE_INSTALLATION || null,
   dossierFichiers: path.join(dossierDonnees, 'factures'),
   dossierPublic: path.join(ici, 'public'),
 });

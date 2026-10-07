@@ -15,7 +15,7 @@ const TYPES_ACCEPTES = {
 };
 const CHAMPS_MONTANT = ['sous_total', 'tps', 'tvq', 'total'];
 
-export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false, dossierPublic }) {
+export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false, dossierPublic, codeInstallation }) {
   const app = express();
   const limiteur = limiteurConnexion();
   const enTraitement = new Set();
@@ -41,6 +41,7 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
   app.get('/api/etat', (req, res) => {
     res.json({
       premierDemarrage: nbUtilisateurs() === 0,
+      codeInstallationRequis: Boolean(codeInstallation),
       utilisateur: req.utilisateur || null,
       quickbooks: { mode: qbo.mode, connecte: qbo.connecte() },
       lectureAuto: lecteur.actif,
@@ -49,7 +50,11 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
 
   app.post('/api/premier-compte', (req, res) => {
     if (nbUtilisateurs() > 0) return res.status(409).json({ erreur: 'Le compte du bureau existe déjà.' });
-    const { nom, identifiant, motDePasse } = req.body || {};
+    const { nom, identifiant, motDePasse, code } = req.body || {};
+    // Sur un serveur en ligne, seul celui qui connaît le code d'installation crée le compte du bureau.
+    if (codeInstallation && !egalSecret(String(code ?? ''), codeInstallation)) {
+      return res.status(403).json({ erreur: 'Code d\'installation incorrect.' });
+    }
     const erreur = validerCompte({ nom, identifiant, motDePasse, role: 'bureau' });
     if (erreur) return res.status(400).json({ erreur });
     const { lastInsertRowid } = db.prepare('INSERT INTO utilisateurs (nom, identifiant, hash, role) VALUES (?, ?, ?, ?)')
@@ -310,6 +315,12 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
 }
 
 // ---------- Validation ----------
+function egalSecret(a, b) {
+  const ha = crypto.createHash('sha256').update(a).digest();
+  const hb = crypto.createHash('sha256').update(b).digest();
+  return crypto.timingSafeEqual(ha, hb);
+}
+
 function texte(v, max) {
   if (v == null) return null;
   const t = String(v).trim();
