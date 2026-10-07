@@ -138,3 +138,11 @@ a.bouton.secondaire { background: transparent; color: var(--accent-lien); }
 .soldes-ligne { flex-basis: 100%; margin-top: 4px; font-size: 13px; font-weight: 400; }
 #f-mouvement label, #f-taux label, #f-regles label { display: block; margin-bottom: 8px; }
 #f-mouvement input, #f-mouvement select, #f-taux input, #f-regles input, #f-regles select { width: 100%; }
+.journee { border-top: 1px solid var(--bord); padding-top: 8px; margin-top: 8px; }
+.entete-jour { display: flex; justify-content: space-between; }
+.entete-jour strong { display: inline-block; }
+.entete-jour strong::first-letter { text-transform: uppercase; }
+.entete-jour span { font-weight: 600; }
+button.diner { min-height: 36px; padding: 4px 12px; margin: 6px 0 2px; font-size: 14px; font-weight: 500;
+  background: transparent; color: var(--doux); border: 1px dashed var(--bord); }
+button.diner.paye { background: var(--succes); border: 1px solid var(--succes); color: #fff; }

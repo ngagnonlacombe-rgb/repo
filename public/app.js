@@ -1150,6 +1150,8 @@ function lundi(d) {
   return l;
 }
 
+// Jour « AAAA-MM-JJ » à l'heure du Québec, comme le serveur le calcule.
+const jourQc = (t) => new Date(t.includes('T') ? t : `${t.replace(' ', 'T')}Z`).toLocaleDateString('en-CA', { timeZone: 'America/Toronto' });
 // Heures décimales (7.5) affichées « 7 h 30 », avec le signe si négatif.
 const heuresDec = (n) => `${n < 0 ? '−' : ''}${duree(Math.abs(n) * 3600000)}`;
 const NOMS_BANQUES = { banque: 'Banque d\'heures', vacances: 'Vacances', maladie: 'Maladie' };
@@ -1171,7 +1173,9 @@ async function vuePunch() {
     <button class="geant ${enCours ? 'danger' : 'succes'}" type="button" id="btn-punch">${enCours ? 'Terminer mon quart' : 'Commencer mon quart'}</button>
     <h2>Mes banques</h2>
     ${tuilesSoldes(mesHeures.soldes)}
-    <h2>Cette semaine : ${duree(cetteSemaine.reduce((t, p) => t + dureeQuart(p, Date.now()), 0))}</h2>
+    <h2>Cette semaine : ${heuresDec(mesHeures.semaines.find((sem) => sem.lundi === jourQc(debutSemaine.toISOString()))?.heures || 0)}</h2>
+    ${mesHeures.regles.dinerMinutes ? `<p class="doux">${mesHeures.regles.dinerMinutes} min de dîner non payées sont retirées chaque jour de ${
+      String(mesHeures.regles.dinerSeuil).replace('.', ',')} h et plus, sauf si le bureau les paie.</p>` : ''}
     <div class="carte"><ul class="liste">${cetteSemaine.map((p) => `
       <li><div class="infos"><strong>${jourCourt(p.debut)}</strong>
         <div class="doux">${heureCourte(p.debut)} à ${p.fin ? heureCourte(p.fin) : 'en cours'}${p.note ? ` · ${h(p.note)}` : ''}</div></div>
@@ -1215,6 +1219,9 @@ const versChamp = (t) => {
 };
 const depuisChamp = (v) => (v ? new Date(v).toISOString() : '');
 
+// Employés dépliés dans l'onglet Heures : ils restent ouverts quand l'écran se rafraîchit (ex. après « Payer le dîner »).
+const heuresOuvertes = new Set();
+
 async function vueHeures(semaineChoisie) {
   const debut = lundi(semaineChoisie ? new Date(`${semaineChoisie}T12:00:00`) : new Date());
   const fin = new Date(debut);
@@ -1223,7 +1230,7 @@ async function vueHeures(semaineChoisie) {
   const precedente = new Date(debut);
   precedente.setDate(precedente.getDate() - 7);
   const periode = `du=${encodeURIComponent(debut.toISOString())}&au=${encodeURIComponent(fin.toISOString())}`;
-  const [{ employes, punchs }, banques] = await Promise.all([api(`/api/bureau/heures?${periode}`), api('/api/bureau/soldes')]);
+  const [{ employes, punchs, jours }, banques] = await Promise.all([api(`/api/bureau/heures?${periode}`), api('/api/bureau/soldes')]);
   const soldesDe = (id) => banques.employes.find((x) => x.id === id)?.soldes;
   const maintenant = Date.now();
   const titre = `${debut.toLocaleDateString('fr-CA', { day: 'numeric', month: 'long' })} au ${
@@ -1241,16 +1248,24 @@ async function vueHeures(semaineChoisie) {
     <div class="actions"><a class="bouton secondaire" href="/api/bureau/heures.csv?${periode}" download>Exporter pour la paie (Excel)</a></div>
     ${employes.map((e) => {
       const siens = punchs.filter((p) => p.employe_id === e.id);
-      return `<details class="carte heures-employe" ${siens.length ? '' : ''}>
-        <summary><strong>${h(e.nom)}</strong><span>${duree(siens.reduce((t, p) => t + dureeQuart(p, maintenant), 0))}</span>
+      const journees = jours.filter((j) => j.employe_id === e.id).sort((a, b) => a.jour.localeCompare(b.jour));
+      return `<details class="carte heures-employe" data-employe="${e.id}" ${heuresOuvertes.has(e.id) ? 'open' : ''}>
+        <summary><strong>${h(e.nom)}</strong><span>${heuresDec(journees.reduce((t, j) => t + j.payees, 0))}</span>
         ${soldesDe(e.id) ? `<div class="doux soldes-ligne">Banque ${heuresDec(soldesDe(e.id).banque)} · Vacances ${heuresDec(soldesDe(e.id).vacances)} · Maladie ${heuresDec(soldesDe(e.id).maladie)}
           · <a href="#banques/${e.id}">Banques et congés</a></div>` : ''}</summary>
-        <ul class="liste">${siens.map((p) => `
-          <li class="quart" data-id="${p.id}">
-            <div class="infos"><strong>${jourCourt(p.debut)}</strong> · ${heureCourte(p.debut)} à ${p.fin ? heureCourte(p.fin) : 'en cours'}
-              <div class="doux">${duree(dureeQuart(p, maintenant))}${p.note ? ` · ${h(p.note)}` : ''}${p.modifie_par ? ` · corrigé par ${h(p.modifie_par)}` : ''}</div></div>
-            <button class="lien" type="button" data-corriger="${p.id}">Corriger</button>
-          </li>`).join('') || '<li class="vide">Aucun quart cette semaine.</li>'}</ul>
+        ${journees.map((j) => `
+          <div class="journee">
+            <div class="entete-jour"><strong>${new Date(`${j.jour}T12:00:00`).toLocaleDateString('fr-CA', { weekday: 'long', day: 'numeric', month: 'short' })}</strong>
+              <span>${heuresDec(j.payees)} payées</span></div>
+            ${j.dinerApplicable ? `<button class="diner ${j.dinerPaye ? 'paye' : ''}" type="button" data-diner="${e.id}|${j.jour}|${j.dinerPaye ? '' : '1'}">
+              ${j.dinerPaye ? '✓ Dîner payé (pas de dîner pris)' : `Dîner −${banques.regles.dinerMinutes} min · Payer le dîner`}</button>` : ''}
+            <ul class="liste">${siens.filter((p) => jourQc(p.debut) === j.jour).map((p) => `
+              <li class="quart" data-id="${p.id}">
+                <div class="infos">${heureCourte(p.debut)} à ${p.fin ? heureCourte(p.fin) : 'en cours'}
+                  <div class="doux">${duree(dureeQuart(p, maintenant))}${p.note ? ` · ${h(p.note)}` : ''}${p.modifie_par ? ` · corrigé par ${h(p.modifie_par)}` : ''}</div></div>
+                <button class="lien" type="button" data-corriger="${p.id}">Corriger</button>
+              </li>`).join('')}</ul>
+          </div>`).join('') || '<p class="vide">Aucun quart cette semaine.</p>'}
         <button class="secondaire" type="button" data-ajouter="${e.id}">Ajouter un quart oublié</button>
       </details>`;
     }).join('') || '<div class="carte vide">Aucun employé pour l\'instant.</div>'}
@@ -1263,9 +1278,14 @@ async function vueHeures(semaineChoisie) {
             `<option value="${v}" ${banques.regles.multiplicateurBanque === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
         <label>Vacances : % des heures travaillées (par défaut)<input name="tauxVacances" type="number" step="0.5" min="0" max="20" value="${banques.regles.tauxVacances}"></label>
         <label>Heures de maladie payées par année<input name="maladieAnnuelle" type="number" step="0.5" min="0" max="200" value="${banques.regles.maladieAnnuelle}"></label>
+        <label>Dîner non payé retiré chaque jour (minutes, 0 pour aucun)<input name="dinerMinutes" type="number" step="5" min="0" max="120" value="${banques.regles.dinerMinutes}"></label>
+        <label>…quand la journée compte au moins (heures)<input name="dinerSeuil" type="number" step="0.5" min="0" max="24" value="${banques.regles.dinerSeuil}"></label>
         <div class="actions"><button>Enregistrer les règles</button></div>
       </form>
     </details>`;
+  vue.querySelectorAll('details[data-employe]').forEach((d) => d.addEventListener('toggle', () => {
+    heuresOuvertes[d.open ? 'add' : 'delete'](Number(d.dataset.employe));
+  }));
   const formRegles = document.getElementById('f-regles');
   formRegles.addEventListener('submit', (ev) => {
     ev.preventDefault();
@@ -1288,6 +1308,15 @@ async function vueHeures(semaineChoisie) {
     </form>`;
 
   vue.onclick = (e) => {
+    const diner = e.target.closest('[data-diner]');
+    if (diner) {
+      const [employeId, jour, paye] = diner.dataset.diner.split('|');
+      occuper(diner, async () => {
+        await api('/api/bureau/diners', { method: 'POST', json: { employe_id: Number(employeId), jour, paye: Boolean(paye) } });
+        route();
+      });
+      return;
+    }
     const corriger = e.target.closest('[data-corriger]');
     const ajouter = e.target.closest('[data-ajouter]');
     if (!corriger && !ajouter) return;

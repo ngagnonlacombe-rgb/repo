@@ -1,6 +1,7 @@
 // Punch : l'employé commence et termine son quart dans l'app ; le bureau consulte et corrige les heures.
 // Les heures sont gardées en UTC (« AAAA-MM-JJ HH:MM:SS », comme datetime('now') de SQLite).
 import { exigerConnexion, exigerBureau } from './auth.js';
+import { jours, jourLocal } from './banques.js';
 
 const DUREE_MAX = 24 * 3600 * 1000;
 const enDate = (t) => new Date(`${t.replace(' ', 'T')}Z`);
@@ -62,29 +63,45 @@ export function brancherPunch(app, { db }) {
       WHERE p.debut < ? AND COALESCE(p.fin, '9999') > ? ORDER BY p.debut`).all(au, du);
     const employes = db.prepare(`SELECT id, nom, actif FROM utilisateurs WHERE role = 'employe'
       AND (actif = 1 OR id IN (SELECT employe_id FROM punchs WHERE debut < ? AND COALESCE(fin, '9999') > ?)) ORDER BY nom`).all(au, du);
-    res.json({ employes, punchs, maintenant: versSql(new Date()) });
+    // Journées de la période (heure du Québec) avec le dîner retiré ou payé.
+    const premier = jourLocal(enDate(du));
+    const dernier = jourLocal(new Date(enDate(au) - 1));
+    const journees = employes.flatMap((e) => jours(db, e.id)
+      .filter((j) => j.jour >= premier && j.jour <= dernier).map((j) => ({ employe_id: e.id, ...j })));
+    res.json({ employes, punchs, jours: journees, maintenant: versSql(new Date()) });
   });
 
-  // Export pour la paie : une ligne par quart, à l'heure du Québec, puis le total de chaque employé.
+  // Export pour la paie : une ligne par jour travaillé (heure du Québec), dîner retiré ou payé, puis le total de chaque employé.
   app.get('/api/bureau/heures.csv', exigerConnexion, exigerBureau, (req, res) => {
     const du = lireMoment(req.query.du);
     const au = lireMoment(req.query.au);
     if (!du || !au) return res.status(400).json({ erreur: 'Période invalide.' });
-    const lignes = db.prepare(`SELECT u.nom, p.debut, p.fin, p.note FROM punchs p JOIN utilisateurs u ON u.id = p.employe_id
-      WHERE p.debut >= ? AND p.debut < ? AND p.fin IS NOT NULL ORDER BY u.nom, p.debut`).all(du, au);
-    const local = (t, options) => enDate(t).toLocaleString('en-CA', { timeZone: 'America/Toronto', hourCycle: 'h23', ...options });
-    const heures = (l) => (enDate(l.fin) - enDate(l.debut)) / 3600000;
+    const premier = jourLocal(enDate(du));
+    const dernier = jourLocal(new Date(enDate(au) - 1));
+    const heureLocale = (t) => enDate(t).toLocaleString('en-CA', { timeZone: 'America/Toronto', hourCycle: 'h23', hour: '2-digit', minute: '2-digit' });
+    const nombre = (n) => n.toFixed(2).replace('.', ',');
     const champ = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const csv = [['Employé', 'Date', 'Début', 'Fin', 'Heures', 'Note']];
-    const totaux = new Map();
-    for (const l of lignes) {
-      csv.push([l.nom, local(l.debut, { year: 'numeric', month: '2-digit', day: '2-digit' }),
-        local(l.debut, { hour: '2-digit', minute: '2-digit' }), local(l.fin, { hour: '2-digit', minute: '2-digit' }),
-        heures(l).toFixed(2).replace('.', ','), l.note]);
-      totaux.set(l.nom, (totaux.get(l.nom) || 0) + heures(l));
+    const csv = [['Employé', 'Date', 'Début', 'Fin', 'Heures travaillées', 'Dîner non payé', 'Heures payées', 'Note']];
+    const totaux = [];
+    const employes = db.prepare("SELECT id, nom FROM utilisateurs WHERE role = 'employe' ORDER BY nom").all();
+    for (const e of employes) {
+      // Seules les journées terminées (aucun quart en cours) partent à la paie.
+      const punchs = db.prepare('SELECT debut, fin, note FROM punchs WHERE employe_id = ? AND debut >= ? AND debut < ? ORDER BY debut')
+        .all(e.id, du, au);
+      const journees = jours(db, e.id).filter((j) => j.jour >= premier && j.jour <= dernier).reverse();
+      let total = 0;
+      let nbJours = 0;
+      for (const j of journees) {
+        const siens = punchs.filter((p) => jourLocal(enDate(p.debut)) === j.jour);
+        if (!siens.length || siens.some((p) => !p.fin)) continue;
+        csv.push([e.nom, j.jour, heureLocale(siens[0].debut), heureLocale(siens.at(-1).fin), nombre(j.travaillees),
+          j.dinerPaye ? 'payé' : nombre(j.diner), nombre(j.payees), siens.map((p) => p.note).filter(Boolean).join(' / ')]);
+        total += j.payees;
+        nbJours += 1;
+      }
+      if (nbJours) totaux.push([`Total ${e.nom}`, '', '', '', '', '', nombre(total), '']);
     }
-    csv.push([]);
-    for (const [nom, total] of totaux) csv.push([`Total ${nom}`, '', '', '', total.toFixed(2).replace('.', ','), '']);
+    csv.push([], ...totaux);
     // Point-virgule et BOM : Excel en français ouvre le fichier directement avec les accents.
     res.type('text/csv; charset=utf-8').attachment(`heures-${req.query.du.slice(0, 10)}.csv`)
       .send(`\ufeff${csv.map((l) => l.map(champ).join(';')).join('\r\n')}\r\n`);

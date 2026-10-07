@@ -95,7 +95,7 @@ test('export des heures pour la paie (CSV, heure du Québec)', async () => {
   assert.match(r.headers.get('content-disposition'), /attachment; filename="heures-/);
   const texte = await r.text();
   const lignes = texte.replace(/^\ufeff/, '').trim().split('\r\n');
-  assert.equal(lignes[0], '"Employé";"Date";"Début";"Fin";"Heures";"Note"');
-  assert.match(lignes[1], /^"Marc";"\d{4}-\d{2}-\d{2}";"\d{2}:\d{2}";"\d{2}:\d{2}";"0,0\d";"Chantier Tremblay"$/);
-  assert.match(lignes.at(-1), /^"Total Marc";"";"";"";"0,0\d";""$/);
+  assert.equal(lignes[0], '"Employé";"Date";"Début";"Fin";"Heures travaillées";"Dîner non payé";"Heures payées";"Note"');
+  assert.match(lignes[1], /^"Marc";"\d{4}-\d{2}-\d{2}";"\d{2}:\d{2}";"\d{2}:\d{2}";"0,0\d";"0,00";"0,0\d";"Chantier Tremblay"$/);
+  assert.match(lignes.at(-1), /^"Total Marc";"";"";"";"";"";"0,0\d";""$/);
 });
