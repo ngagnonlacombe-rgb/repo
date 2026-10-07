@@ -1206,7 +1206,7 @@ async function vuePunch() {
       <div class="chrono" id="chrono">${enCours ? duree(Date.now() - dateSql(enCours.debut)) : '—'}</div>
       ${enCours?.note ? `<div class="doux">${h(enCours.note)}</div>` : ''}
     </div>
-    ${enCours ? '' : '<input id="note-quart" placeholder="Chantier ou note (facultatif)" maxlength="500">'}
+    <input id="note-quart" placeholder="${enCours ? 'Note de fin de quart (facultatif)' : 'Chantier ou note (facultatif)'}" maxlength="500">
     <button class="geant ${enCours ? 'danger' : 'succes'}" type="button" id="btn-punch">${enCours ? 'Terminer mon quart' : 'Commencer mon quart'}</button>
     <h2>Mes banques</h2>
     ${tuilesSoldes(mesHeures.soldes)}
@@ -1233,8 +1233,8 @@ async function vuePunch() {
   bouton.addEventListener('click', () => {
     if (enCours && !confirm('Terminer ton quart maintenant ?')) return;
     occuper(bouton, async () => {
-      if (enCours) await api('/api/punch/fin', { method: 'POST' });
-      else await api('/api/punch/debut', { method: 'POST', json: { note: document.getElementById('note-quart').value } });
+      const note = document.getElementById('note-quart').value;
+      await api(enCours ? '/api/punch/fin' : '/api/punch/debut', { method: 'POST', json: { note } });
       avis(enCours ? 'Quart terminé. Bon retour !' : 'Quart commencé. Bonne journée !');
       route();
     });
