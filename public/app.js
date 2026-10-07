@@ -71,6 +71,8 @@ function route() {
   if (etat.premierDemarrage) return vuePremierCompte();
   if (!u) return vueConnexion();
   if (ancre.startsWith('facture/')) return vueEditionFacture(Number(ancre.split('/')[1]));
+  if (ancre === 'projets' || ancre === 'projets/archives') return vueProjets(ancre === 'projets/archives');
+  if (ancre.startsWith('projet/')) return vueProjet(Number(ancre.split('/')[1]));
   if (u.role === 'bureau') {
     if (requete?.includes('qbo=ok')) avis('QuickBooks est connecté.');
     if (requete?.includes('qbo=echec')) avis('La connexion à QuickBooks a échoué. Réessaie.');
@@ -140,11 +142,13 @@ function vuePremierCompte() {
 
 // ---------- Employé ----------
 function ongletsBureau(actif) {
-  if (etat.utilisateur.role !== 'bureau') return '';
   const lien = (ancre, texte) => `<a href="#${ancre}" ${actif === ancre ? 'aria-current="page"' : ''}>${texte}</a>`;
+  if (etat.utilisateur.role !== 'bureau') {
+    return `<nav class="onglets">${lien('factures', 'Mes factures')}${lien('projets', 'Projets')}</nav>`;
+  }
   return `<nav class="onglets">
     ${lien('bureau/en_attente', 'À approuver')}${lien('bureau/approuvee', 'Approuvées')}
-    ${lien('bureau/refusee', 'Refusées')}${lien('factures', 'Déposer')}${lien('employes', 'Employés')}
+    ${lien('bureau/refusee', 'Refusées')}${lien('factures', 'Déposer')}${lien('projets', 'Projets')}${lien('employes', 'Employés')}
   </nav>`;
 }
 
@@ -438,6 +442,161 @@ function brancherApprobation(f) {
       carte.remove();
     });
   });
+}
+
+// ---------- Projets ----------
+const heure = (d) => new Date(`${d.replace(' ', 'T')}Z`).toLocaleString('fr-CA', {
+  day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+});
+
+async function vueProjets(archives) {
+  const bureau = etat.utilisateur.role === 'bureau';
+  vue.innerHTML = `${ongletsBureau('projets')}<div id="contenu"><p class="vide">Chargement…</p></div>`;
+  const { projets } = await api(`/api/projets${archives ? '?archives=1' : ''}`);
+  const contenu = document.getElementById('contenu');
+  if (!contenu) return;
+  contenu.innerHTML = `
+    ${archives ? '<p><a href="#projets">← Projets en cours</a></p>' : ''}
+    <div class="carte"><ul class="liste">${projets.length ? projets.map((p) => `
+      <li>
+        <div class="infos"><a href="#projet/${p.id}"><strong>${h(p.nom)}</strong></a>
+          <div class="doux">${p.adresse ? `${h(p.adresse)} · ` : ''}${p.nb_messages} message(s) · ${p.nb_photos} photo(s)</div></div>
+        <a class="bouton secondaire" href="#projet/${p.id}">Ouvrir</a>
+      </li>`).join('') : `<li class="vide">${archives ? 'Aucun projet archivé.' : 'Aucun projet en cours.'}</li>`}</ul></div>
+    ${bureau && !archives ? `
+    <h2>Nouveau projet</h2>
+    <form class="carte" id="f-projet">
+      <div class="grille2">
+        <div><label for="pn">Nom</label><input id="pn" name="nom" placeholder="Ex. : Toiture Tremblay" required></div>
+        <div><label for="pa">Adresse (facultatif)</label><input id="pa" name="adresse"></div>
+      </div>
+      <div class="actions"><button>Créer le projet</button></div>
+    </form>
+    <p><a href="#projets/archives">Voir les projets archivés</a></p>` : ''}`;
+
+  const form = document.getElementById('f-projet');
+  form?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    occuper(form.querySelector('button'), async () => {
+      const { projet } = await api('/api/projets', { method: 'POST', json: lireFormulaire(form) });
+      location.hash = `projet/${projet.id}`;
+    });
+  });
+}
+
+function bulleMessage(m, idProjet) {
+  const moi = etat.utilisateur;
+  const peutEffacer = m.auteur_id === moi.id || moi.role === 'bureau';
+  const photo = `/api/projets/${idProjet}/messages/${m.id}/photo`;
+  return `
+    <li class="message ${m.auteur_id === moi.id ? 'moi' : ''}" data-id="${m.id}">
+      <div class="doux"><strong>${h(m.auteur)}</strong> · ${heure(m.cree_le)}
+        ${peutEffacer ? `<button class="lien" type="button" data-effacer="${m.id}">Effacer</button>` : ''}</div>
+      ${m.photo ? `<a href="${photo}" target="_blank" rel="noopener"><img src="${photo}" alt="Photo du projet" loading="lazy"></a>` : ''}
+      ${m.texte ? `<div class="texte">${h(m.texte)}</div>` : ''}
+    </li>`;
+}
+
+async function vueProjet(id) {
+  const ancre = location.hash;
+  const { projet: p, messages } = await api(`/api/projets/${id}`);
+  const bureau = etat.utilisateur.role === 'bureau';
+  let dernier = messages.at(-1)?.id || 0;
+
+  vue.innerHTML = `${ongletsBureau('projets')}
+    <p><a href="#projets">← Tous les projets</a></p>
+    <h1>${h(p.nom)}${p.actif ? '' : ' <span class="pastille s-brouillon">Archivé</span>'}</h1>
+    ${p.adresse ? `<p class="doux"><a href="https://maps.google.com/?q=${encodeURIComponent(p.adresse)}" target="_blank" rel="noopener">${h(p.adresse)}</a></p>` : ''}
+    <form class="carte" id="f-notes">
+      <label for="notes">Notes du projet (visibles par toute l'équipe)</label>
+      <textarea id="notes" name="notes" rows="5" placeholder="Matériaux, mesures, codes de porte, contacts…">${h(p.notes)}</textarea>
+      <div class="actions"><button class="secondaire">Enregistrer les notes</button></div>
+    </form>
+    <h2>Discussion et photos</h2>
+    <div class="carte"><ul class="liste fil" id="fil">${messages.map((m) => bulleMessage(m, id)).join('')
+      || '<li class="vide" id="fil-vide">Aucun message. Lance la discussion ou ajoute une photo.</li>'}</ul></div>
+    ${p.actif ? `
+    <form class="carte composer" id="f-message">
+      <input type="file" id="photo" accept="image/*" hidden>
+      <textarea name="texte" rows="2" placeholder="Écris un message…"></textarea>
+      <div class="doux" id="photo-choisie" hidden></div>
+      <div class="actions">
+        <button class="secondaire" type="button" id="btn-photo">Ajouter une photo</button>
+        <button>Envoyer</button>
+      </div>
+    </form>` : ''}
+    ${bureau ? `<div class="actions"><button class="${p.actif ? 'danger' : 'secondaire'}" type="button" id="btn-archiver">
+      ${p.actif ? 'Archiver le projet' : 'Réactiver le projet'}</button></div>` : ''}`;
+
+  const fil = document.getElementById('fil');
+  const ajouter = (liste) => {
+    if (!liste.length) return;
+    document.getElementById('fil-vide')?.remove();
+    for (const m of liste) {
+      if (fil.querySelector(`[data-id="${m.id}"]`)) continue;
+      fil.insertAdjacentHTML('beforeend', bulleMessage(m, id));
+      dernier = Math.max(dernier, m.id);
+    }
+  };
+
+  const formNotes = document.getElementById('f-notes');
+  formNotes.addEventListener('submit', (e) => {
+    e.preventDefault();
+    occuper(formNotes.querySelector('button'), async () => {
+      await api(`/api/projets/${id}`, { method: 'PATCH', json: { notes: formNotes.notes.value } });
+      avis('Notes enregistrées.');
+    });
+  });
+
+  const formMessage = document.getElementById('f-message');
+  if (formMessage) {
+    const champ = document.getElementById('photo');
+    const choisie = document.getElementById('photo-choisie');
+    document.getElementById('btn-photo').addEventListener('click', () => champ.click());
+    champ.addEventListener('change', () => {
+      choisie.hidden = !champ.files[0];
+      choisie.textContent = champ.files[0] ? `Photo prête à envoyer : ${champ.files[0].name}` : '';
+    });
+    formMessage.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const texte = formMessage.texte.value.trim();
+      if (!texte && !champ.files[0]) { avis('Écris un message ou ajoute une photo.'); return; }
+      occuper(formMessage.querySelector('button:not([type])'), async () => {
+        const donnees = new FormData();
+        donnees.append('texte', texte);
+        if (champ.files[0]) donnees.append('photo', await reduireImage(champ.files[0]));
+        const { message } = await api(`/api/projets/${id}/messages`, { method: 'POST', body: donnees });
+        ajouter([message]);
+        formMessage.reset();
+        choisie.hidden = true;
+        fil.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      });
+    });
+  }
+
+  fil.addEventListener('click', (e) => {
+    const bouton = e.target.closest('[data-effacer]');
+    if (!bouton || !confirm('Effacer ce message ?')) return;
+    occuper(bouton, async () => {
+      await api(`/api/projets/${id}/messages/${bouton.dataset.effacer}`, { method: 'DELETE' });
+      bouton.closest('li').remove();
+    });
+  });
+
+  document.getElementById('btn-archiver')?.addEventListener('click', (e) => {
+    if (p.actif && !confirm('Archiver ce projet ? Les employés ne le verront plus.')) return;
+    occuper(e.currentTarget, async () => {
+      await api(`/api/projets/${id}`, { method: 'PATCH', json: { actif: !p.actif } });
+      location.hash = 'projets';
+    });
+  });
+
+  // Nouveaux messages des collègues : vérifiés toutes les 10 secondes tant que le projet est ouvert.
+  const minuterie = setInterval(async () => {
+    if (location.hash !== ancre || !document.body.contains(fil)) { clearInterval(minuterie); return; }
+    if (document.hidden) return;
+    try { ajouter((await api(`/api/projets/${id}?apres=${dernier}`)).messages); } catch { /* réseau : on réessaie */ }
+  }, 10000);
 }
 
 async function vueEmployes() {
