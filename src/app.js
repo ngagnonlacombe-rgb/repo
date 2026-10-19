@@ -275,7 +275,21 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
 
   // ---------- Bureau : employés ----------
   app.get('/api/bureau/utilisateurs', exigerConnexion, exigerBureau, (_req, res) => {
-    res.json({ utilisateurs: db.prepare('SELECT id, nom, identifiant, role, actif, chef_projet FROM utilisateurs ORDER BY actif DESC, nom').all() });
+    res.json({ utilisateurs: db.prepare(`SELECT id, nom, identifiant, role, actif, chef_projet FROM utilisateurs
+      WHERE supprime = 0 ORDER BY actif DESC, nom`).all() });
+  });
+
+  // Supprimer un compte : il disparaît de l'app et ne peut plus se connecter. Ses heures, factures et messages
+  // restent pour la paie et la comptabilité. L'identifiant est libéré pour un nouveau compte.
+  app.delete('/api/bureau/utilisateurs/:id', exigerConnexion, exigerBureau, (req, res) => {
+    const u = db.prepare('SELECT * FROM utilisateurs WHERE id = ? AND supprime = 0').get(Number(req.params.id));
+    if (!u) return res.status(404).json({ erreur: 'Utilisateur introuvable.' });
+    if (u.id === req.utilisateur.id) return res.status(400).json({ erreur: 'Tu ne peux pas supprimer ton propre compte.' });
+    db.prepare(`UPDATE utilisateurs SET supprime = 1, actif = 0, chef_projet = 0, identifiant = identifiant || '~supprime-' || id
+      WHERE id = ?`).run(u.id);
+    db.prepare('DELETE FROM sessions WHERE utilisateur_id = ?').run(u.id);
+    db.prepare('DELETE FROM push_abonnements WHERE utilisateur_id = ?').run(u.id);
+    res.status(204).end();
   });
 
   app.post('/api/bureau/utilisateurs', exigerConnexion, exigerBureau, (req, res) => {
@@ -291,7 +305,7 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
   });
 
   app.patch('/api/bureau/utilisateurs/:id', exigerConnexion, exigerBureau, (req, res) => {
-    const u = db.prepare('SELECT * FROM utilisateurs WHERE id = ?').get(Number(req.params.id));
+    const u = db.prepare('SELECT * FROM utilisateurs WHERE id = ? AND supprime = 0').get(Number(req.params.id));
     if (!u) return res.status(404).json({ erreur: 'Utilisateur introuvable.' });
     const { actif, motDePasse, chef_projet: chefProjet } = req.body || {};
     if (u.id === req.utilisateur.id && actif === false) {

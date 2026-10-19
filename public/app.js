@@ -1782,6 +1782,7 @@ async function vueEmployes() {
           ${u.chef_projet ? 'Retirer chargé de projet' : 'Nommer chargé de projet'}</button>`}
         <button class="secondaire" data-mdp="${u.id}" type="button">Nouveau NIP</button>
         ${u.id === etat.utilisateur.id ? '' : `<button class="${u.actif ? 'danger' : 'secondaire'}" data-actif="${u.id}" data-valeur="${u.actif ? 0 : 1}" type="button">${u.actif ? 'Désactiver' : 'Réactiver'}</button>`}
+        ${u.id === etat.utilisateur.id ? '' : `<button class="danger" data-supprimer="${u.id}" data-nom="${h(u.nom)}" type="button">Supprimer</button>`}
       </li>`).join('')}</ul></div>
     <h2>Ajouter un employé</h2>
     <form class="carte" id="f-employe">
@@ -1807,6 +1808,14 @@ async function vueEmployes() {
     await api(`/api/bureau/utilisateurs/${b.dataset.actif}`, { method: 'PATCH', json: { actif: b.dataset.valeur === '1' } });
     vueEmployes();
   })));
+  vue.querySelectorAll('[data-supprimer]').forEach((b) => b.addEventListener('click', () => {
+    if (!confirm(`Supprimer le compte de ${b.dataset.nom} ?\n\nIl ne pourra plus se connecter et disparaîtra de la liste. Ses heures, factures et messages déjà enregistrés restent pour la paie.`)) return;
+    occuper(b, async () => {
+      await api(`/api/bureau/utilisateurs/${b.dataset.supprimer}`, { method: 'DELETE' });
+      avis('Compte supprimé.');
+      vueEmployes();
+    });
+  }));
   vue.querySelectorAll('[data-chef]').forEach((b) => b.addEventListener('click', () => occuper(b, async () => {
     await api(`/api/bureau/utilisateurs/${b.dataset.chef}`, { method: 'PATCH', json: { chef_projet: b.dataset.valeur === '1' } });
     vueEmployes();

@@ -152,3 +152,21 @@ test('notifications : un message prévient le bureau ou l\'employé sur son tél
 
   assert.equal((await marc('/api/notifications/abonnement', { method: 'DELETE', json: { endpoint: 'https://push.example/marc' } })).status, 204);
 });
+
+test('le bureau supprime un compte : plus de connexion, retiré des listes, identifiant libéré', async () => {
+  const comptes = async () => (await bureau('/api/bureau/utilisateurs')).corps.utilisateurs;
+  const idMarc = (await comptes()).find((u) => u.identifiant === 'marc').id;
+  const idNicolas = (await comptes()).find((u) => u.identifiant === 'nicolas').id;
+  assert.equal((await marc(`/api/bureau/utilisateurs/${idMarc}`, { method: 'DELETE' })).status, 403);
+  assert.equal((await bureau(`/api/bureau/utilisateurs/${idNicolas}`, { method: 'DELETE' })).status, 400);
+  assert.equal((await bureau(`/api/bureau/utilisateurs/${idMarc}`, { method: 'DELETE' })).status, 204);
+
+  assert.ok(!(await comptes()).some((u) => u.id === idMarc));
+  assert.ok(!(await bureau('/api/bureau/messagerie')).corps.conversations.some((c) => c.id === idMarc));
+  assert.equal((await marc('/api/messagerie')).status, 401);
+  assert.equal((await client()('/api/connexion', { method: 'POST', json: { identifiant: 'marc', motDePasse: '4821' } })).status, 401);
+  assert.equal((await bureau(`/api/bureau/utilisateurs/${idMarc}`, { method: 'PATCH', json: { actif: true } })).status, 404);
+  assert.equal((await bureau(`/api/bureau/utilisateurs/${idMarc}`, { method: 'DELETE' })).status, 404);
+  // L'identifiant peut servir à un nouveau compte.
+  assert.equal((await bureau('/api/bureau/utilisateurs', { method: 'POST', json: { nom: 'Marc B.', identifiant: 'marc', motDePasse: '1234' } })).status, 201);
+});

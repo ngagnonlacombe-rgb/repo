@@ -82,7 +82,7 @@ export function brancherMessagerie(app, { db, dossierFichiers, notifieur }) {
              d.texte AS dernier_texte, d.fichier IS NOT NULL AS dernier_photo, d.cree_le AS dernier_le
       FROM utilisateurs u
       LEFT JOIN messages_bureau d ON d.id = (SELECT MAX(id) FROM messages_bureau WHERE employe_id = u.id)
-      WHERE u.role = 'employe' AND (u.actif = 1 OR d.id IS NOT NULL)
+      WHERE u.role = 'employe' AND u.supprime = 0 AND (u.actif = 1 OR d.id IS NOT NULL)
       ORDER BY d.id IS NULL, d.id DESC, u.nom`).all();
     res.json({ conversations });
   });
