@@ -245,6 +245,18 @@ test('lien du plan magicplan : posé par le bureau ou un chargé de projet, visi
   assert.equal((await ouvrir()).magicplan_url, null);
 });
 
+test('le bureau et les chargés de projet renomment un projet, pas les employés', async () => {
+  const renommer = (qui, nom) => qui(`/api/projets/${idProjet}`, { method: 'PATCH', json: { nom } });
+  const nomActuel = (await bureau(`/api/projets/${idProjet}`)).corps.projet.nom;
+  assert.equal((await renommer(marc, 'Autre')).status, 403);
+  // Julie est chargée de projet depuis le test précédent.
+  assert.equal((await renommer(julie, ' ')).status, 400);
+  assert.equal((await renommer(julie, 'Toiture Tremblay (phase 2)')).corps.projet.nom, 'Toiture Tremblay (phase 2)');
+  assert.equal((await renommer(bureau, nomActuel)).corps.projet.nom, nomActuel);
+  // Un chargé de projet ne peut toujours pas archiver.
+  assert.equal((await julie(`/api/projets/${idProjet}`, { method: 'PATCH', json: { actif: false } })).status, 403);
+});
+
 test('un chargé de projet voit tous les documents, un employé seulement les siens', async () => {
   const { utilisateurs } = (await bureau('/api/bureau/utilisateurs')).corps;
   const idMarc = utilisateurs.find((u) => u.identifiant === 'marc').id;
@@ -264,4 +276,18 @@ test('un chargé de projet voit tous les documents, un employé seulement les si
   await bureau(`/api/bureau/utilisateurs/${idMarc}`, { method: 'PATCH', json: { chef_projet: true } });
   assert.deepEqual(await noms(marc), ['facture-marc.pdf', 'soumission.pdf']);
   await bureau(`/api/bureau/utilisateurs/${idMarc}`, { method: 'PATCH', json: { chef_projet: false } });
+});
+
+test('PDF des photos à envoyer par courriel, sans rien garder sur le serveur', async () => {
+  const avant = (await bureau(`/api/projets/${idProjet}/dossiers/documents`)).corps.fichiers.length;
+  const form = new FormData();
+  for (let i = 0; i < 3; i += 1) form.append('photos', new Blob([JPEG], { type: 'image/jpeg' }), `photo-${i}.jpg`);
+  const r = await marc(`/api/projets/${idProjet}/photos.pdf`, { method: 'POST', body: form });
+  assert.equal(r.status, 200);
+  const pdf = Buffer.from(r.corps).toString('latin1');
+  assert.match(pdf, /^%PDF-1\.4/);
+  assert.match(pdf, /\/Count 3/);
+  assert.equal((await bureau(`/api/projets/${idProjet}/dossiers/documents`)).corps.fichiers.length, avant);
+  assert.equal((await marc(`/api/projets/${idProjet}/photos.pdf`, { method: 'POST', body: new FormData() })).status, 400);
+  assert.equal((await marc('/api/projets/9999/photos.pdf', { method: 'POST', body: new FormData() })).status, 404);
 });
