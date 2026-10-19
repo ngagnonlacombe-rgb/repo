@@ -157,3 +157,7 @@ button.diner.paye { background: var(--succes); border: 1px solid var(--succes); 
 .plan-projet button.lien { color: var(--accent-lien); }
 
 .positions { font-size: 13px; margin-top: 2px; }
+
+#btn-renommer-projet { font-size: 14px; font-weight: 400; margin-left: 6px; }
+.pdf-pret { display: flex; flex-direction: column; gap: 4px; }
+#btn-pdf { margin-top: 8px; }

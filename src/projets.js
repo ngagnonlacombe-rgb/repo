@@ -87,15 +87,18 @@ export function brancherProjets(app, { db, dossierFichiers }) {
     res.status(201).json({ projet: projet(Number(lastInsertRowid)) });
   });
 
-  // Tout le monde peut mettre les notes à jour ; le nom, l'adresse et l'archivage relèvent du bureau ;
-  // le lien du plan magicplan, du bureau et des chargés de projet.
+  // Tout le monde peut mettre les notes à jour ; l'adresse et l'archivage relèvent du bureau ;
+  // le nom et le lien du plan magicplan, du bureau et des chargés de projet.
   app.patch('/api/projets/:id', exigerConnexion, (req, res) => {
     const p = projet(Number(req.params.id));
     if (!visible(p, req.utilisateur)) return res.status(404).json({ erreur: 'Projet introuvable.' });
     const b = req.body || {};
     const bureau = req.utilisateur.role === 'bureau';
-    if (!bureau && ['nom', 'adresse', 'actif'].some((c) => c in b)) {
+    if (!bureau && ['adresse', 'actif'].some((c) => c in b)) {
       return res.status(403).json({ erreur: 'Seul le bureau peut modifier ce projet.' });
+    }
+    if ('nom' in b && !bureau && !req.utilisateur.chef_projet) {
+      return res.status(403).json({ erreur: 'Seuls le bureau et les chargés de projet peuvent renommer un projet.' });
     }
     if ('magicplan_url' in b && !bureau && !req.utilisateur.chef_projet) {
       return res.status(403).json({ erreur: 'Seuls le bureau et les chargés de projet peuvent changer le plan.' });
@@ -294,6 +297,26 @@ export function brancherProjets(app, { db, dossierFichiers }) {
       .run(p.id, req.utilisateur.id, fichier, nom, pdf.length);
     db.prepare("UPDATE projets SET maj_le = datetime('now') WHERE id = ?").run(p.id);
     res.status(201).json({ fichier: { id: Number(lastInsertRowid), nom_original: nom, pages: req.files.length } });
+  });
+
+  // PDF des photos à envoyer par courriel : le téléphone envoie les photos déjà réduites en JPEG,
+  // le serveur renvoie le PDF sans le garder.
+  const photosPdf = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 8 * 1024 * 1024, files: 300 },
+    fileFilter: (_req, f, cb) => cb(null, f.mimetype === 'image/jpeg'),
+  });
+  app.post('/api/projets/:id/photos.pdf', exigerConnexion, photosPdf.array('photos', 300), (req, res) => {
+    const p = projet(Number(req.params.id));
+    if (!visible(p, req.utilisateur)) return res.status(404).json({ erreur: 'Projet introuvable.' });
+    if (!req.files?.length) return res.status(400).json({ erreur: 'Aucune photo à mettre dans le PDF.' });
+    let pdf;
+    try {
+      pdf = pdfDePages(req.files.map((f) => f.buffer));
+    } catch (e) {
+      return res.status(400).json({ erreur: e.message });
+    }
+    res.type('application/pdf').send(pdf);
   });
 
   app.get('/api/projets/:id/fichiers/:fid', exigerConnexion, (req, res) => {

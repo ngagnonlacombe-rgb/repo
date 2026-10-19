@@ -542,7 +542,8 @@ async function vueProjet(id, onglet, albumId = 0) {
 
   vue.innerHTML = `${ongletsBureau('projets')}
     <p><a href="#projets">← Tous les projets</a></p>
-    <h1>${h(p.nom)}${p.actif ? '' : ' <span class="pastille s-brouillon">Archivé</span>'}</h1>
+    <h1>${h(p.nom)}${p.actif ? '' : ' <span class="pastille s-brouillon">Archivé</span>'}
+      ${peutPlan ? '<button class="lien" type="button" id="btn-renommer-projet">Renommer</button>' : ''}</h1>
     ${p.adresse ? `<p class="doux"><a href="https://maps.google.com/?q=${encodeURIComponent(p.adresse)}" target="_blank" rel="noopener">${h(p.adresse)}</a></p>` : ''}
     <div class="plan-projet">
       ${p.magicplan_url ? `<a class="bouton secondaire" href="${h(p.magicplan_url)}" target="_blank" rel="noopener">📐 Voir le plan magicplan</a>` : ''}
@@ -553,6 +554,15 @@ async function vueProjet(id, onglet, albumId = 0) {
     <div id="contenu-projet"></div>
     ${bureau ? `<div class="actions"><button class="${p.actif ? 'danger' : 'secondaire'}" type="button" id="btn-archiver">
       ${p.actif ? 'Archiver le projet' : 'Réactiver le projet'}</button></div>` : ''}`;
+
+  document.getElementById('btn-renommer-projet')?.addEventListener('click', (e) => {
+    const nom = prompt('Nouveau nom du projet :', p.nom)?.trim();
+    if (!nom || nom === p.nom) return;
+    occuper(e.currentTarget, async () => {
+      await api(`/api/projets/${id}`, { method: 'PATCH', json: { nom } });
+      route();
+    });
+  });
 
   document.getElementById('btn-plan')?.addEventListener('click', (e) => {
     const lien = prompt('Dans magicplan, ouvre le projet, touche Partager, copie le lien puis colle-le ici.\n(Laisse vide pour retirer le plan.)', p.magicplan_url || '');
@@ -668,6 +678,33 @@ async function ongletDossier(contenu, p, dossier, moi) {
 
 // Onglet Photos : des sous-dossiers que l'équipe crée et renomme, puis les photos du dossier ouvert
 // (à la racine, celles qui ne sont pas encore rangées). Le mode « Trier » déplace plusieurs photos d'un coup.
+// PDF des photos d'un projet (ou d'un dossier), de la plus ancienne à la plus récente. Chaque photo est réduite
+// sur le téléphone pour que le PDF reste assez léger pour un courriel.
+async function pdfDesPhotos(idProjet, idAlbum, nom, progres) {
+  const { fichiers } = await api(`/api/projets/${idProjet}/dossiers/photos${idAlbum ? `?album=${idAlbum}` : ''}`);
+  if (!fichiers.length) throw new Error('Aucune photo dans ce dossier.');
+  const donnees = new FormData();
+  let nb = 0;
+  for (const [i, f] of fichiers.reverse().entries()) {
+    progres(`Préparation ${i + 1} / ${fichiers.length}…`);
+    try {
+      const image = await createImageBitmap(await (await fetch(f.url, { credentials: 'same-origin' })).blob());
+      const echelle = Math.min(1, 1600 / Math.max(image.width, image.height));
+      const toile = document.createElement('canvas');
+      toile.width = Math.round(image.width * echelle);
+      toile.height = Math.round(image.height * echelle);
+      toile.getContext('2d').drawImage(image, 0, 0, toile.width, toile.height);
+      const jpeg = await new Promise((ok) => toile.toBlob(ok, 'image/jpeg', 0.75));
+      if (jpeg) { donnees.append('photos', jpeg, `photo-${i + 1}.jpg`); nb += 1; }
+    } catch { /* photo illisible par ce téléphone : on passe à la suivante */ }
+  }
+  if (!nb) throw new Error('Impossible de lire les photos sur ce téléphone.');
+  progres('Création du PDF…');
+  const rep = await fetch(`/api/projets/${idProjet}/photos.pdf`, { method: 'POST', body: donnees, credentials: 'same-origin' });
+  if (!rep.ok) throw new Error((await rep.json().catch(() => ({}))).erreur || 'Le PDF n\'a pas pu être créé.');
+  return new File([await rep.blob()], `${nom}.pdf`, { type: 'application/pdf' });
+}
+
 async function ongletPhotos(contenu, p, moi, albumId) {
   const { albums } = await api(`/api/projets/${p.id}/albums`);
   const album = albums.find((a) => a.id === albumId);
@@ -690,6 +727,8 @@ async function ongletPhotos(contenu, p, moi, albumId) {
       </div>`}
     ${p.actif ? `<input type="file" id="fichier-dossier" accept="image/*" multiple hidden>
       <button class="pleine" type="button" id="btn-deposer">${album ? `Ajouter des photos dans « ${h(album.nom)} »` : 'Ajouter des photos'}</button>` : ''}
+    <button class="secondaire pleine" type="button" id="btn-pdf">📄 ${album ? `Télécharger « ${h(album.nom)} » en PDF` : 'Télécharger toutes les photos en PDF'}</button>
+    <div id="pdf-pret"></div>
     <div class="entete-photos"><h3>${album ? 'Photos du dossier' : (albums.length ? 'Photos non classées' : 'Photos')}</h3>
       ${p.actif ? '<button class="secondaire" type="button" id="btn-trier">Trier</button>' : ''}</div>
     <div class="barre-tri" id="barre-tri" hidden>
@@ -703,6 +742,23 @@ async function ongletPhotos(contenu, p, moi, albumId) {
     </div>
     ${!album && !albums.length ? '<p class="doux">Crée des dossiers (ex. « Avant », « Toiture ») pour démêler les photos.</p>' : ''}
     <div id="liste-dossier"><p class="vide">Chargement…</p></div>`;
+
+  const btnPdf = document.getElementById('btn-pdf');
+  btnPdf.addEventListener('click', () => occuper(btnPdf, async () => {
+    const nom = `${p.nom}${album ? ` - ${album.nom}` : ' - Photos'}`.replace(/[\\/:*?"<>|]/g, '-');
+    const fichier = await pdfDesPhotos(p.id, album?.id, nom, (texte) => { btnPdf.textContent = texte; });
+    const pret = document.getElementById('pdf-pret');
+    if (!pret) return;
+    const lien = URL.createObjectURL(fichier);
+    const partage = navigator.canShare?.({ files: [fichier] });
+    pret.innerHTML = `<div class="carte pdf-pret"><strong>📄 ${h(fichier.name)}</strong>
+      <span class="doux">${taille(fichier.size)}${fichier.size > 20 * 1024 * 1024 ? ' · trop lourd pour certains courriels' : ''}</span>
+      <div class="actions">${partage ? '<button type="button" id="btn-partager-pdf">Envoyer par courriel…</button>' : ''}
+        <a class="bouton ${partage ? 'secondaire' : ''}" href="${lien}" download="${h(fichier.name)}">Télécharger</a></div></div>`;
+    document.getElementById('btn-partager-pdf')?.addEventListener('click', () => {
+      navigator.share({ files: [fichier], title: fichier.name }).catch(() => {});
+    });
+  }));
 
   const nommer = (actuel) => {
     const nom = prompt('Nom du dossier de photos :', actuel || '');
