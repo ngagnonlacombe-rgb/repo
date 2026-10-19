@@ -132,6 +132,16 @@ test('dossiers Photos et Documents : dépôt, liste, téléchargement, types ref
     })()) },
   });
   assert.match(telechargement.headers.get('content-disposition'), /attachment; filename="devis.csv"/);
+  // Un PDF s'ouvre dans le navigateur, sauf avec le bouton « Télécharger » (?telecharger=1).
+  const cookieBureau = (await (async () => {
+    const r = await fetch(`${base}/api/connexion`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identifiant: 'nicolas', motDePasse: 'un-bon-mot-de-passe' }) });
+    return r.headers.get('set-cookie').split(';')[0];
+  })());
+  const urlPlan = docs.find((f) => f.nom_original === 'plan-étage.pdf').url;
+  assert.equal((await fetch(base + urlPlan, { headers: { cookie: cookieBureau } })).headers.get('content-disposition'), null);
+  const pdfPlan = await fetch(`${base}${urlPlan}?telecharger=1`, { headers: { cookie: cookieBureau } });
+  assert.equal(pdfPlan.status, 200);
+  assert.match(pdfPlan.headers.get('content-disposition'), /^attachment; filename="plan-.tage\.pdf"/);
 
   const idPlan = d.corps.fichier.id;
   assert.equal((await marc(`/api/projets/${idProjet}/fichiers/${idPlan}`, { method: 'DELETE' })).status, 404);
