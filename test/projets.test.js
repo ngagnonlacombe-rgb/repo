@@ -318,3 +318,25 @@ test('notes sur les photos : écrites par les employés, reprises dans le PDF', 
   const entrees = pdf.slice(debut).split('\n').slice(3).filter((l) => / n $/.test(l));
   entrees.forEach((l, i) => assert.ok(pdf.startsWith(`${i + 1} 0 obj`, Number(l.slice(0, 10)))));
 });
+
+test('dessin sur une photo : calque PNG enregistré, remplacé puis effacé', async () => {
+  const deposee = (await marc(`/api/projets/${idProjet}/dossiers/photos`)).corps.fichiers.find((f) => f.source === 'dossier');
+  const url = `/api/projets/${idProjet}/photos/dossier/${deposee.id}/dessin`;
+  const png = (octets) => { const f = new FormData(); f.append('dessin', new Blob([octets], { type: 'image/png' }), 'dessin.png'); return f; };
+  const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  assert.equal((await julie(url, { method: 'PUT', body: new FormData() })).status, 400);
+  const r = await julie(url, { method: 'PUT', body: png(PNG) });
+  assert.equal(r.status, 200);
+  const liste = async () => (await marc(`/api/projets/${idProjet}/dossiers/photos`)).corps.fichiers.find((f) => f.id === deposee.id && f.source === 'dossier');
+  assert.equal((await liste()).dessin, r.corps.dessin);
+  const lu = await marc(r.corps.dessin);
+  assert.equal(lu.status, 200);
+  assert.deepEqual(Buffer.from(lu.corps), PNG);
+  // Un nouveau dessin remplace l'ancien.
+  const r2 = await marc(url, { method: 'PUT', body: png(Buffer.concat([PNG, Buffer.from([1])])) });
+  assert.notEqual(r2.corps.dessin, r.corps.dessin);
+  assert.equal((await marc(url, { method: 'DELETE' })).status, 204);
+  assert.equal((await liste()).dessin, null);
+  assert.equal((await marc(url)).status, 404);
+  assert.equal((await marc(`/api/projets/${idProjet}/photos/autre/${deposee.id}/dessin`, { method: 'PUT', body: png(PNG) })).status, 404);
+});

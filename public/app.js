@@ -628,7 +628,8 @@ async function ongletDossier(contenu, p, dossier, moi) {
     } else if (photos) {
       liste.innerHTML = `<div class="galerie">${fichiers.map((f) => `
         <figure>
-          <a href="${f.url}" target="_blank" rel="noopener"><img src="${f.url}" alt="Photo du projet" loading="lazy"></a>
+          <a class="vignette" href="${f.url}" data-ouvrir="${i}"><img src="${f.url}" alt="Photo du projet" loading="lazy">
+            ${f.dessin ? `<img class="calque" src="${f.dessin}" alt="" loading="lazy">` : ''}</a>
           <figcaption class="doux">${h(f.auteur)} · ${heure(f.cree_le)}
             ${effacable(f) ? `<button class="lien" type="button" data-effacer="${f.id}">Effacer</button>` : ''}</figcaption>
         </figure>`).join('')}</div>`;
@@ -694,7 +695,13 @@ async function pdfDesPhotos(idProjet, idAlbum, nom, progres) {
       const toile = document.createElement('canvas');
       toile.width = Math.round(image.width * echelle);
       toile.height = Math.round(image.height * echelle);
-      toile.getContext('2d').drawImage(image, 0, 0, toile.width, toile.height);
+      const g = toile.getContext('2d');
+      g.drawImage(image, 0, 0, toile.width, toile.height);
+      if (f.dessin) {
+        try {
+          g.drawImage(await createImageBitmap(await (await fetch(f.dessin, { credentials: 'same-origin' })).blob()), 0, 0, toile.width, toile.height);
+        } catch { /* dessin illisible : la photo part sans lui */ }
+      }
       const jpeg = await new Promise((ok) => toile.toBlob(ok, 'image/jpeg', 0.75));
       if (jpeg) {
         donnees.append('photos', jpeg, `photo-${i + 1}.jpg`);
@@ -712,6 +719,214 @@ async function pdfDesPhotos(idProjet, idAlbum, nom, progres) {
   return new File([await rep.blob()], `${nom}.pdf`, { type: 'application/pdf' });
 }
 
+// Visionneuse plein écran : flèches (ou glisser du doigt) pour passer d'une photo à l'autre, note et dessin.
+// Le dessin est un calque PNG transparent : la photo d'origine n'est jamais modifiée.
+const COULEURS_DESSIN = ['#e3001b', '#ffd400', '#ffffff', '#111111'];
+function visionneuse(p, photos, depart, rafraichir) {
+  let index = depart;
+  let modifie = false;
+  let dessin = null; // { calque, traits, efface } pendant le mode dessin
+  let couleur = COULEURS_DESSIN[0];
+  const modifiable = p.actif;
+  const boite = document.createElement('div');
+  boite.className = 'visionneuse';
+  boite.setAttribute('role', 'dialog');
+  boite.innerHTML = `
+    <div class="vis-haut"><span id="vis-position"></span><span id="vis-auteur" class="vis-doux"></span>
+      <button type="button" class="vis-bouton" id="vis-fermer" aria-label="Fermer">✕</button></div>
+    <div class="vis-scene">
+      <button type="button" class="vis-nav" id="vis-prec" aria-label="Photo précédente">‹</button>
+      <div class="vis-cadre"><img id="vis-photo" alt="Photo du projet"><img id="vis-calque" class="calque" alt="" hidden><canvas id="vis-toile" hidden></canvas></div>
+      <button type="button" class="vis-nav" id="vis-suiv" aria-label="Photo suivante">›</button>
+    </div>
+    <div class="vis-bas" id="vis-lecture">
+      <p id="vis-legende"></p>
+      ${modifiable ? `<div class="vis-actions"><button type="button" class="vis-bouton" id="vis-note">📝 Note</button>
+        <button type="button" class="vis-bouton" id="vis-dessiner">✏️ Dessiner</button></div>` : ''}
+    </div>
+    <div class="vis-bas" id="vis-ecriture" hidden>
+      <textarea id="vis-texte" rows="3" maxlength="500" placeholder="Note sur cette photo (elle apparaîtra dans le PDF)"></textarea>
+      <div class="vis-actions"><button type="button" class="vis-bouton" id="vis-annuler-note">Annuler</button>
+        <button type="button" id="vis-enregistrer-note">Enregistrer la note</button></div>
+    </div>
+    <div class="vis-bas" id="vis-outils" hidden>
+      <div class="vis-actions">${COULEURS_DESSIN.map((c) => `<button type="button" class="vis-couleur" data-couleur="${c}" style="background:${c}" aria-label="Couleur"></button>`).join('')}
+        <button type="button" class="vis-bouton" id="vis-defaire">↶ Défaire</button>
+        <button type="button" class="vis-bouton" id="vis-tout-effacer">Tout effacer</button></div>
+      <div class="vis-actions"><button type="button" class="vis-bouton" id="vis-quitter-dessin">Annuler</button>
+        <button type="button" id="vis-enregistrer-dessin">Enregistrer le dessin</button></div>
+    </div>`;
+  document.body.append(boite);
+  document.body.classList.add('sans-defilement');
+  const $ = (id) => boite.querySelector(`#${id}`);
+  const photo = $('vis-photo');
+  const calque = $('vis-calque');
+  const toile = $('vis-toile');
+  const actuelle = () => photos[index];
+  const chemin = (f) => `/api/projets/${p.id}/photos/${f.source}/${f.id}`;
+
+  function montrer() {
+    const f = actuelle();
+    photo.src = f.url;
+    calque.hidden = !f.dessin;
+    if (f.dessin) calque.src = f.dessin;
+    $('vis-position').textContent = `${index + 1} / ${photos.length}`;
+    $('vis-auteur').textContent = `${f.auteur} · ${heure(f.cree_le)}`;
+    $('vis-legende').textContent = f.legende || '';
+    $('vis-prec').hidden = index === 0;
+    $('vis-suiv').hidden = index === photos.length - 1;
+  }
+  const aller = (pas) => {
+    if (dessin || !$('vis-ecriture').hidden) return;
+    const suivant = index + pas;
+    if (suivant >= 0 && suivant < photos.length) { index = suivant; montrer(); }
+  };
+  function fermer() {
+    if (dessin && dessin.traits.length && !confirm('Quitter sans enregistrer le dessin ?')) return;
+    boite.remove();
+    document.body.classList.remove('sans-defilement');
+    document.removeEventListener('keydown', clavier);
+    if (modifie) rafraichir();
+  }
+  function clavier(e) {
+    if (e.target.tagName === 'TEXTAREA') return;
+    if (e.key === 'ArrowLeft') aller(-1);
+    else if (e.key === 'ArrowRight') aller(1);
+    else if (e.key === 'Escape') fermer();
+  }
+  document.addEventListener('keydown', clavier);
+  $('vis-fermer').onclick = fermer;
+  $('vis-prec').onclick = () => aller(-1);
+  $('vis-suiv').onclick = () => aller(1);
+  // Glisser du doigt vers la gauche ou la droite (hors mode dessin).
+  let departX = null;
+  photo.addEventListener('touchstart', (e) => { departX = e.touches[0].clientX; }, { passive: true });
+  photo.addEventListener('touchend', (e) => {
+    if (departX == null) return;
+    const dx = e.changedTouches[0].clientX - departX;
+    departX = null;
+    if (Math.abs(dx) > 50) aller(dx < 0 ? 1 : -1);
+  });
+
+  // ---------- Note ----------
+  if (modifiable) {
+    $('vis-note').onclick = () => {
+      $('vis-texte').value = actuelle().legende || '';
+      $('vis-lecture').hidden = true;
+      $('vis-ecriture').hidden = false;
+      $('vis-texte').focus();
+    };
+    $('vis-annuler-note').onclick = () => { $('vis-ecriture').hidden = true; $('vis-lecture').hidden = false; };
+    $('vis-enregistrer-note').onclick = (e) => occuper(e.currentTarget, async () => {
+      const f = actuelle();
+      const r = await api(chemin(f), { method: 'PATCH', json: { legende: $('vis-texte').value } });
+      f.legende = r.legende || '';
+      modifie = true;
+      $('vis-ecriture').hidden = true;
+      $('vis-lecture').hidden = false;
+      montrer();
+    });
+
+    // ---------- Dessin ----------
+    const g = toile.getContext('2d');
+    const redessiner = () => {
+      g.clearRect(0, 0, toile.width, toile.height);
+      if (dessin.calque && !dessin.efface) g.drawImage(dessin.calque, 0, 0, toile.width, toile.height);
+      g.lineCap = 'round';
+      g.lineJoin = 'round';
+      for (const t of dessin.traits) {
+        g.strokeStyle = t.couleur;
+        g.lineWidth = t.epaisseur;
+        g.beginPath();
+        t.points.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
+        if (t.points.length === 1) g.lineTo(t.points[0][0] + 0.1, t.points[0][1]);
+        g.stroke();
+      }
+    };
+    const choisirCouleur = (c) => {
+      couleur = c;
+      boite.querySelectorAll('.vis-couleur').forEach((b) => b.classList.toggle('active', b.dataset.couleur === c));
+    };
+    boite.querySelectorAll('.vis-couleur').forEach((b) => { b.onclick = () => choisirCouleur(b.dataset.couleur); });
+    const quitterDessin = () => {
+      dessin = null;
+      toile.hidden = true;
+      $('vis-outils').hidden = true;
+      $('vis-lecture').hidden = false;
+      montrer();
+    };
+    $('vis-dessiner').onclick = async () => {
+      const f = actuelle();
+      if (!photo.complete) await new Promise((ok) => { photo.onload = ok; });
+      // Calque à la taille de la photo, plafonnée à 1600 px de côté.
+      const echelle = Math.min(1, 1600 / Math.max(photo.naturalWidth, photo.naturalHeight));
+      toile.width = Math.round(photo.naturalWidth * echelle);
+      toile.height = Math.round(photo.naturalHeight * echelle);
+      let base = null;
+      if (f.dessin) {
+        try { base = await createImageBitmap(await (await fetch(f.dessin, { credentials: 'same-origin' })).blob()); } catch { /* calque illisible */ }
+      }
+      dessin = { calque: base, traits: [], efface: false };
+      choisirCouleur(couleur);
+      calque.hidden = true;
+      toile.hidden = false;
+      $('vis-lecture').hidden = true;
+      $('vis-outils').hidden = false;
+      $('vis-prec').hidden = true;
+      $('vis-suiv').hidden = true;
+      redessiner();
+    };
+    let trait = null;
+    const point = (e) => {
+      const r = toile.getBoundingClientRect();
+      return [(e.clientX - r.left) * (toile.width / r.width), (e.clientY - r.top) * (toile.height / r.height)];
+    };
+    toile.addEventListener('pointerdown', (e) => {
+      if (!dessin) return;
+      toile.setPointerCapture(e.pointerId);
+      trait = { couleur, epaisseur: Math.max(4, Math.round(toile.width / 150)), points: [point(e)] };
+      dessin.traits.push(trait);
+      redessiner();
+    });
+    toile.addEventListener('pointermove', (e) => {
+      if (!trait) return;
+      trait.points.push(point(e));
+      redessiner();
+    });
+    const finTrait = () => { trait = null; };
+    toile.addEventListener('pointerup', finTrait);
+    toile.addEventListener('pointercancel', finTrait);
+    $('vis-defaire').onclick = () => {
+      if (dessin.traits.length) dessin.traits.pop();
+      else dessin.efface = false;
+      redessiner();
+    };
+    $('vis-tout-effacer').onclick = () => { dessin.traits = []; dessin.efface = true; redessiner(); };
+    $('vis-quitter-dessin').onclick = () => {
+      if (dessin.traits.length && !confirm('Quitter sans enregistrer le dessin ?')) return;
+      quitterDessin();
+    };
+    $('vis-enregistrer-dessin').onclick = (e) => occuper(e.currentTarget, async () => {
+      const f = actuelle();
+      const vide = !dessin.traits.length && (dessin.efface || !dessin.calque);
+      if (vide) {
+        if (f.dessin) await api(`${chemin(f)}/dessin`, { method: 'DELETE' });
+        f.dessin = null;
+      } else {
+        const png = await new Promise((ok) => toile.toBlob(ok, 'image/png'));
+        const donnees = new FormData();
+        donnees.append('dessin', png, 'dessin.png');
+        f.dessin = (await api(`${chemin(f)}/dessin`, { method: 'PUT', body: donnees })).dessin;
+      }
+      modifie = true;
+      quitterDessin();
+      avis(vide ? 'Dessin effacé.' : 'Dessin enregistré.');
+    });
+  }
+
+  montrer();
+}
+
 async function ongletPhotos(contenu, p, moi, albumId) {
   const { albums } = await api(`/api/projets/${p.id}/albums`);
   const album = albums.find((a) => a.id === albumId);
@@ -719,6 +934,7 @@ async function ongletPhotos(contenu, p, moi, albumId) {
   const peutSupprimer = album && (album.cree_par === moi.id || moi.role === 'bureau');
   const choisies = new Map();
   let notes = new Map();
+  let photosAffichees = [];
   let tri = false;
 
   contenu.innerHTML = `
@@ -786,9 +1002,10 @@ async function ongletPhotos(contenu, p, moi, albumId) {
     majBarre();
     liste.innerHTML = !fichiers.length
       ? `<div class="carte vide">${album ? 'Ce dossier est vide.' : (albums.length ? 'Toutes les photos sont rangées.' : 'Aucune photo pour l\'instant.')}</div>`
-      : `<div class="galerie">${fichiers.map((f) => `
+      : `<div class="galerie">${fichiers.map((f, i) => `
         <figure data-photo="${f.source}:${f.id}">
-          <a href="${f.url}" target="_blank" rel="noopener"><img src="${f.url}" alt="Photo du projet" loading="lazy"></a>
+          <a class="vignette" href="${f.url}" data-ouvrir="${i}"><img src="${f.url}" alt="Photo du projet" loading="lazy">
+            ${f.dessin ? `<img class="calque" src="${f.dessin}" alt="" loading="lazy">` : ''}</a>
           <span class="coche" aria-hidden="true">✓</span>
           <figcaption class="doux">${f.legende ? `<span class="legende">${h(f.legende)}</span>` : ''}
             ${h(f.auteur)} · ${heure(f.cree_le)}${f.source === 'discussion' ? ' · discussion' : ''}
@@ -796,6 +1013,7 @@ async function ongletPhotos(contenu, p, moi, albumId) {
             ${effacable(f) ? `<button class="lien" type="button" data-effacer="${f.id}">Effacer</button>` : ''}</figcaption>
         </figure>`).join('')}</div>`;
     notes = new Map(fichiers.map((f) => [`${f.source}:${f.id}`, f.legende || '']));
+    photosAffichees = fichiers;
     liste.classList.toggle('en-tri', tri);
   };
 
@@ -885,6 +1103,12 @@ async function ongletPhotos(contenu, p, moi, albumId) {
       else choisies.set(figure.dataset.photo, { source, id: Number(id) });
       figure.classList.toggle('choisie', choisies.has(figure.dataset.photo));
       majBarre();
+      return;
+    }
+    const ouvrir = e.target.closest('[data-ouvrir]');
+    if (ouvrir) {
+      e.preventDefault();
+      visionneuse(p, photosAffichees, Number(ouvrir.dataset.ouvrir), afficher);
       return;
     }
     const annoter = e.target.closest('[data-annoter]');

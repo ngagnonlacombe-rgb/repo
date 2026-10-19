@@ -204,6 +204,8 @@ export function ouvrirBase(fichier) {
     }
     // Note écrite sous une photo, reprise dans le PDF des photos.
     if (!colonnes.includes('legende')) db.exec(`ALTER TABLE ${table} ADD COLUMN legende TEXT`);
+    // Dessin fait sur une photo (calque PNG transparent, même proportions que la photo).
+    if (!colonnes.includes('dessin')) db.exec(`ALTER TABLE ${table} ADD COLUMN dessin TEXT`);
   }
   return db;
 }
