@@ -188,6 +188,10 @@ export function ouvrirBase(fichier) {
   for (const c of ['lat_debut', 'lng_debut', 'precision_debut', 'lat_fin', 'lng_fin', 'precision_fin']) {
     if (!colonnesPunch.includes(c)) db.exec(`ALTER TABLE punchs ADD COLUMN ${c} REAL`);
   }
+  // Compte supprimé par le bureau : retiré des listes, mais son historique (punchs, factures, messages) reste.
+  if (!db.prepare('PRAGMA table_info(utilisateurs)').all().some((c) => c.name === 'supprime')) {
+    db.exec('ALTER TABLE utilisateurs ADD COLUMN supprime INTEGER NOT NULL DEFAULT 0');
+  }
   // Chargé de projet : un employé qui peut créer des projets.
   if (!db.prepare('PRAGMA table_info(utilisateurs)').all().some((c) => c.name === 'chef_projet')) {
     db.exec('ALTER TABLE utilisateurs ADD COLUMN chef_projet INTEGER NOT NULL DEFAULT 0');
