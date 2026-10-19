@@ -684,6 +684,7 @@ async function pdfDesPhotos(idProjet, idAlbum, nom, progres) {
   const { fichiers } = await api(`/api/projets/${idProjet}/dossiers/photos${idAlbum ? `?album=${idAlbum}` : ''}`);
   if (!fichiers.length) throw new Error('Aucune photo dans ce dossier.');
   const donnees = new FormData();
+  const legendes = [];
   let nb = 0;
   for (const [i, f] of fichiers.reverse().entries()) {
     progres(`Préparation ${i + 1} / ${fichiers.length}…`);
@@ -695,10 +696,16 @@ async function pdfDesPhotos(idProjet, idAlbum, nom, progres) {
       toile.height = Math.round(image.height * echelle);
       toile.getContext('2d').drawImage(image, 0, 0, toile.width, toile.height);
       const jpeg = await new Promise((ok) => toile.toBlob(ok, 'image/jpeg', 0.75));
-      if (jpeg) { donnees.append('photos', jpeg, `photo-${i + 1}.jpg`); nb += 1; }
+      if (jpeg) {
+        donnees.append('photos', jpeg, `photo-${i + 1}.jpg`);
+        const date = dateSql(f.cree_le).toLocaleString('fr-CA', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        legendes.push({ meta: `${date} · ${f.auteur}`, note: f.legende || '' });
+        nb += 1;
+      }
     } catch { /* photo illisible par ce téléphone : on passe à la suivante */ }
   }
   if (!nb) throw new Error('Impossible de lire les photos sur ce téléphone.');
+  donnees.append('legendes', JSON.stringify(legendes));
   progres('Création du PDF…');
   const rep = await fetch(`/api/projets/${idProjet}/photos.pdf`, { method: 'POST', body: donnees, credentials: 'same-origin' });
   if (!rep.ok) throw new Error((await rep.json().catch(() => ({}))).erreur || 'Le PDF n\'a pas pu être créé.');
@@ -711,6 +718,7 @@ async function ongletPhotos(contenu, p, moi, albumId) {
   if (albumId && !album) { location.hash = `projet/${p.id}/photos`; return; }
   const peutSupprimer = album && (album.cree_par === moi.id || moi.role === 'bureau');
   const choisies = new Map();
+  let notes = new Map();
   let tri = false;
 
   contenu.innerHTML = `
@@ -782,9 +790,12 @@ async function ongletPhotos(contenu, p, moi, albumId) {
         <figure data-photo="${f.source}:${f.id}">
           <a href="${f.url}" target="_blank" rel="noopener"><img src="${f.url}" alt="Photo du projet" loading="lazy"></a>
           <span class="coche" aria-hidden="true">✓</span>
-          <figcaption class="doux">${h(f.auteur)} · ${heure(f.cree_le)}${f.source === 'discussion' ? ' · discussion' : ''}
+          <figcaption class="doux">${f.legende ? `<span class="legende">${h(f.legende)}</span>` : ''}
+            ${h(f.auteur)} · ${heure(f.cree_le)}${f.source === 'discussion' ? ' · discussion' : ''}
+            ${p.actif ? `<button class="lien" type="button" data-annoter="${f.source}:${f.id}">${f.legende ? 'Modifier la note' : 'Ajouter une note'}</button>` : ''}
             ${effacable(f) ? `<button class="lien" type="button" data-effacer="${f.id}">Effacer</button>` : ''}</figcaption>
         </figure>`).join('')}</div>`;
+    notes = new Map(fichiers.map((f) => [`${f.source}:${f.id}`, f.legende || '']));
     liste.classList.toggle('en-tri', tri);
   };
 
@@ -874,6 +885,17 @@ async function ongletPhotos(contenu, p, moi, albumId) {
       else choisies.set(figure.dataset.photo, { source, id: Number(id) });
       figure.classList.toggle('choisie', choisies.has(figure.dataset.photo));
       majBarre();
+      return;
+    }
+    const annoter = e.target.closest('[data-annoter]');
+    if (annoter) {
+      const note = prompt('Note sur cette photo (elle apparaîtra dans le PDF) :', notes.get(annoter.dataset.annoter) || '');
+      if (note === null) return;
+      const [source, id] = annoter.dataset.annoter.split(':');
+      occuper(annoter, async () => {
+        await api(`/api/projets/${p.id}/photos/${source}/${id}`, { method: 'PATCH', json: { legende: note } });
+        await afficher();
+      });
       return;
     }
     const b = e.target.closest('[data-effacer]');

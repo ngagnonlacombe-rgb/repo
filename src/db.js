@@ -202,6 +202,8 @@ export function ouvrirBase(fichier) {
     if (!colonnes.includes('album_id')) {
       db.exec(`ALTER TABLE ${table} ADD COLUMN album_id INTEGER REFERENCES projet_albums(id) ON DELETE SET NULL`);
     }
+    // Note écrite sous une photo, reprise dans le PDF des photos.
+    if (!colonnes.includes('legende')) db.exec(`ALTER TABLE ${table} ADD COLUMN legende TEXT`);
   }
   return db;
 }

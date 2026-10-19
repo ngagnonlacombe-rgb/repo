@@ -291,3 +291,30 @@ test('PDF des photos à envoyer par courriel, sans rien garder sur le serveur', 
   assert.equal((await marc(`/api/projets/${idProjet}/photos.pdf`, { method: 'POST', body: new FormData() })).status, 400);
   assert.equal((await marc('/api/projets/9999/photos.pdf', { method: 'POST', body: new FormData() })).status, 404);
 });
+
+test('notes sur les photos : écrites par les employés, reprises dans le PDF', async () => {
+  const photos = (await marc(`/api/projets/${idProjet}/dossiers/photos`)).corps.fichiers;
+  const deposee = photos.find((f) => f.source === 'dossier');
+  const url = (f) => `/api/projets/${idProjet}/photos/${f.source}/${f.id}`;
+  const r = await julie(url(deposee), { method: 'PATCH', json: { legende: '  Dégât d’eau (plafond) côté nord  ' } });
+  assert.equal(r.status, 200);
+  const relue = (await marc(`/api/projets/${idProjet}/dossiers/photos`)).corps.fichiers.find((f) => f.id === deposee.id && f.source === 'dossier');
+  assert.equal(relue.legende, 'Dégât d’eau (plafond) côté nord');
+  // Une note vide l'efface ; une photo inconnue ou une mauvaise source donne 404.
+  assert.equal((await marc(url(deposee), { method: 'PATCH', json: { legende: '' } })).corps.legende, null);
+  assert.equal((await marc(`/api/projets/${idProjet}/photos/dossier/9999`, { method: 'PATCH', json: { legende: 'x' } })).status, 404);
+  assert.equal((await marc(`/api/projets/${idProjet}/photos/autre/${deposee.id}`, { method: 'PATCH', json: { legende: 'x' } })).status, 404);
+
+  const form = new FormData();
+  form.append('photos', new Blob([JPEG], { type: 'image/jpeg' }), 'a.jpg');
+  form.append('photos', new Blob([JPEG], { type: 'image/jpeg' }), 'b.jpg');
+  form.append('legendes', JSON.stringify([{ meta: '19 octobre 2026 · Julie', note: 'Dégât d’eau (plafond) côté nord' }, {}]));
+  const pdf = Buffer.from((await marc(`/api/projets/${idProjet}/photos.pdf`, { method: 'POST', body: form })).corps).toString('latin1');
+  assert.match(pdf, /\/BaseFont \/Helvetica/);
+  // Accents en WinAnsi, apostrophe typographique (0x92) et parenthèses échappées.
+  assert.ok(pdf.includes('(D\xe9g\xe2t d\x92eau \\(plafond\\) c\xf4t\xe9 nord) Tj'));
+  assert.ok(pdf.includes('(19 octobre 2026 \xb7 Julie) Tj'));
+  const debut = Number(pdf.match(/startxref\n(\d+)/)[1]);
+  const entrees = pdf.slice(debut).split('\n').slice(3).filter((l) => / n $/.test(l));
+  entrees.forEach((l, i) => assert.ok(pdf.startsWith(`${i + 1} 0 obj`, Number(l.slice(0, 10)))));
+});

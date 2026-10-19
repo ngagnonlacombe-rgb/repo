@@ -161,3 +161,4 @@ button.diner.paye { background: var(--succes); border: 1px solid var(--succes); 
 #btn-renommer-projet { font-size: 14px; font-weight: 400; margin-left: 6px; }
 .pdf-pret { display: flex; flex-direction: column; gap: 4px; }
 #btn-pdf { margin-top: 8px; }
+.galerie .legende { display: block; color: var(--texte); font-size: 13px; margin-bottom: 2px; white-space: pre-wrap; }
