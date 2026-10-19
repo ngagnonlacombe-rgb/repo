@@ -164,12 +164,14 @@ export function brancherProjets(app, { db, dossierFichiers }) {
     const seulementLesMiens = nomDossier === 'documents' && !voitTousDocuments(req.utilisateur);
     const fichiers = db.prepare(`
       SELECT f.id, f.nom_original, f.type_mime, f.taille, f.cree_le AS cree_le, f.auteur_id, u.nom AS auteur,
-             '/api/projets/' || f.projet_id || '/fichiers/' || f.id AS url, 'dossier' AS source, f.album_id AS album_id
+             '/api/projets/' || f.projet_id || '/fichiers/' || f.id AS url, 'dossier' AS source, f.album_id AS album_id,
+             f.legende AS legende
       FROM projet_fichiers f JOIN utilisateurs u ON u.id = f.auteur_id
       WHERE f.projet_id = ? AND f.dossier = ? ${filtre('f')} ${seulementLesMiens ? 'AND f.auteur_id = ?' : ''}
       ${nomDossier === 'photos' ? `UNION ALL
       SELECT m.id, NULL, m.type_mime, NULL, m.cree_le, m.auteur_id, u.nom,
-             '/api/projets/' || m.projet_id || '/messages/' || m.id || '/photo', 'discussion', m.album_id
+             '/api/projets/' || m.projet_id || '/messages/' || m.id || '/photo', 'discussion', m.album_id,
+             COALESCE(m.legende, m.texte)
       FROM projet_messages m JOIN utilisateurs u ON u.id = m.auteur_id
       WHERE m.projet_id = ? AND m.fichier IS NOT NULL ${filtre('m')}` : ''}
       ORDER BY cree_le DESC LIMIT 500`).all(...(nomDossier === 'photos' ? [p.id, nomDossier, ...valeurs, p.id, ...valeurs] : [p.id, nomDossier, ...(seulementLesMiens ? [req.utilisateur.id] : [])]));
@@ -272,6 +274,23 @@ export function brancherProjets(app, { db, dossierFichiers }) {
     res.json({ ranges });
   });
 
+  // Note sous une photo (déposée ou envoyée dans la discussion) : tous ceux qui voient le projet peuvent l'écrire.
+  app.patch('/api/projets/:id/photos/:source/:pid', exigerConnexion, (req, res) => {
+    const p = projetOuvert(req, res);
+    if (!p) return;
+    const requete = req.params.source === 'discussion'
+      ? 'UPDATE projet_messages SET legende = ? WHERE id = ? AND projet_id = ? AND fichier IS NOT NULL'
+      : req.params.source === 'dossier'
+        ? "UPDATE projet_fichiers SET legende = ? WHERE id = ? AND projet_id = ? AND dossier = 'photos'" : null;
+    if (!requete) return res.status(404).json({ erreur: 'Photo introuvable.' });
+    // Une note vide efface la note (pour une photo de la discussion, on garde alors une note vide plutôt que le message).
+    const legende = String(req.body?.legende ?? '').trim().slice(0, 500);
+    const valeur = legende || (req.params.source === 'discussion' ? '' : null);
+    const { changes } = db.prepare(requete).run(valeur, Number(req.params.pid), p.id);
+    if (!changes) return res.status(404).json({ erreur: 'Photo introuvable.' });
+    res.json({ legende: legende || null });
+  });
+
   // Scanner : le téléphone envoie les pages photographiées (JPEG), le serveur en fait un PDF du dossier Documents.
   const scan = multer({
     storage: multer.memoryStorage(),
@@ -312,7 +331,13 @@ export function brancherProjets(app, { db, dossierFichiers }) {
     if (!req.files?.length) return res.status(400).json({ erreur: 'Aucune photo à mettre dans le PDF.' });
     let pdf;
     try {
-      pdf = pdfDePages(req.files.map((f) => f.buffer));
+      // legendes : tableau JSON aligné sur les photos, [{ meta: 'date · auteur', note: '…' }, …].
+      let legendes = [];
+      try { legendes = JSON.parse(req.body?.legendes || '[]'); } catch { /* sans légendes */ }
+      if (!Array.isArray(legendes)) legendes = [];
+      pdf = pdfDePages(req.files.map((f) => f.buffer), legendes.map((l) => ({
+        meta: String(l?.meta ?? '').slice(0, 200), note: String(l?.note ?? '').slice(0, 500),
+      })));
     } catch (e) {
       return res.status(400).json({ erreur: e.message });
     }

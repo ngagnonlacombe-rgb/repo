@@ -17,7 +17,35 @@ export function tailleJpeg(octets) {
   return null;
 }
 
-export function pdfDePages(jpegs) {
+// Texte pour la police Helvetica standard (encodage WinAnsi) : accents français, guillemets et tirets compris.
+const WIN_ANSI = { '€': 0x80, '…': 0x85, '‘': 0x91, '’': 0x92, '“': 0x93, '”': 0x94, '–': 0x96, '—': 0x97, 'œ': 0x9c, 'Œ': 0x8c };
+function chaine(texte) {
+  const octets = [...texte].map((c) => {
+    const code = c.codePointAt(0);
+    return WIN_ANSI[c] ?? (code >= 32 && code <= 255 && !(code >= 0x7f && code <= 0x9f) ? code : 0x3f);
+  });
+  // Échappe \, ( et ) à l'intérieur d'une chaîne PDF.
+  return `(${Buffer.from(octets).toString('latin1').replace(/[\\()]/g, (c) => `\\${c}`)})`;
+}
+
+// Coupe une note en lignes d'au plus `max` caractères, sur les espaces.
+function couper(texte, max) {
+  const lignes = [];
+  for (const paragraphe of texte.split(/\r?\n/)) {
+    let ligne = '';
+    for (const mot of paragraphe.split(/\s+/).filter(Boolean)) {
+      for (let morceau = mot; morceau; morceau = morceau.slice(max)) {
+        const bout = morceau.slice(0, max);
+        if (ligne && `${ligne} ${bout}`.length > max) { lignes.push(ligne); ligne = bout; } else ligne = ligne ? `${ligne} ${bout}` : bout;
+      }
+    }
+    lignes.push(ligne);
+  }
+  return lignes;
+}
+
+// legendes[i] (facultatif) : { meta, note } écrits sous la photo de la page i.
+export function pdfDePages(jpegs, legendes = []) {
   const morceaux = [];
   const positions = [];
   let taille = 0;
@@ -37,17 +65,30 @@ export function pdfDePages(jpegs) {
   });
   objet(1, '<< /Type /Catalog /Pages 2 0 R >>');
   objet(2, `<< /Type /Pages /Kids [${pages.map((p) => `${p.page} 0 R`).join(' ')}] /Count ${pages.length} >>`);
-  for (const p of pages) {
-    // Page de 612 points de large (format lettre), hauteur selon les proportions de la photo.
+  const police = 3 + pages.length * 3;
+  for (const [i, p] of pages.entries()) {
+    // Page de 612 points de large (format lettre), hauteur selon les proportions de la photo, plus la légende en dessous.
     const l = 612;
     const h = Math.round((612 * p.hauteur) / p.largeur);
+    const meta = legendes[i]?.meta?.trim() || '';
+    const note = legendes[i]?.note?.trim() ? couper(legendes[i].note.trim(), 95) : [];
+    const texte = [];
+    let y = 0;
+    if (meta || note.length) {
+      // Marges de 24 pt, 9 pt gris pour la date et l'auteur, 11 pt noir pour la note.
+      y = 24 + (meta ? 13 : 0) + note.length * 14 + 8;
+      let ligne = y - 8 - (meta ? 9 : 11);
+      if (meta) { texte.push(`BT /F1 9 Tf 0.4 g 24 ${ligne} Td ${chaine(meta)} Tj ET`); ligne -= 15; }
+      for (const n of note) { texte.push(`BT /F1 11 Tf 0 g 24 ${ligne} Td ${chaine(n)} Tj ET`); ligne -= 14; }
+    }
     const couleurs = p.composantes === 1 ? '/DeviceGray' : p.composantes === 4 ? '/DeviceCMYK' : '/DeviceRGB';
-    const dessin = `q ${l} 0 0 ${h} 0 0 cm /Im0 Do Q`;
-    objet(p.page, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${l} ${h}] /Resources << /XObject << /Im0 ${p.image} 0 R >> >> /Contents ${p.dessin} 0 R >>`);
+    const dessin = [`q ${l} 0 0 ${h} 0 ${y} cm /Im0 Do Q`, ...texte].join('\n');
+    objet(p.page, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${l} ${h + y}] /Resources << /XObject << /Im0 ${p.image} 0 R >> /Font << /F1 ${police} 0 R >> >> /Contents ${p.dessin} 0 R >>`);
     objet(p.image, `<< /Type /XObject /Subtype /Image /Width ${p.largeur} /Height ${p.hauteur} /ColorSpace ${couleurs} /BitsPerComponent 8 /Filter /DCTDecode /Length ${p.jpeg.length} >>`, p.jpeg);
     objet(p.dessin, `<< /Length ${dessin.length} >>`, dessin);
   }
-  const nbObjets = 2 + pages.length * 3;
+  objet(police, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
+  const nbObjets = 3 + pages.length * 3;
   const debutXref = taille;
   ecrire(`xref\n0 ${nbObjets + 1}\n0000000000 65535 f \n`);
   for (let n = 1; n <= nbObjets; n += 1) ecrire(`${String(positions[n]).padStart(10, '0')} 00000 n \n`);
