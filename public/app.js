@@ -628,8 +628,7 @@ async function ongletDossier(contenu, p, dossier, moi) {
     } else if (photos) {
       liste.innerHTML = `<div class="galerie">${fichiers.map((f) => `
         <figure>
-          <a class="vignette" href="${f.url}" data-ouvrir="${i}"><img src="${f.url}" alt="Photo du projet" loading="lazy">
-            ${f.dessin ? `<img class="calque" src="${f.dessin}" alt="" loading="lazy">` : ''}</a>
+          <a href="${f.url}" target="_blank" rel="noopener"><img src="${f.url}" alt="Photo du projet" loading="lazy"></a>
           <figcaption class="doux">${h(f.auteur)} · ${heure(f.cree_le)}
             ${effacable(f) ? `<button class="lien" type="button" data-effacer="${f.id}">Effacer</button>` : ''}</figcaption>
         </figure>`).join('')}</div>`;
@@ -638,6 +637,7 @@ async function ongletDossier(contenu, p, dossier, moi) {
         <li>
           <div class="infos"><a href="${f.url}" target="_blank" rel="noopener"><strong>${h(f.nom_original || 'Document')}</strong></a>
             <div class="doux">${h(f.auteur)} · ${heure(f.cree_le)} · ${taille(f.taille)}</div></div>
+          <a class="bouton secondaire" href="${f.url}?telecharger=1" download="${h(f.nom_original || 'document')}">Télécharger</a>
           ${effacable(f) ? `<button class="danger" type="button" data-effacer="${f.id}">Effacer</button>` : ''}
         </li>`).join('')}</ul></div>`;
     }

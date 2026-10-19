@@ -394,8 +394,9 @@ export function brancherProjets(app, { db, dossierFichiers }) {
     const cache = f?.dossier === 'documents' && f.auteur_id !== req.utilisateur.id && !voitTousDocuments(req.utilisateur);
     if (!visible(p, req.utilisateur) || !f || cache) return res.status(404).json({ erreur: 'Fichier introuvable.' });
     res.type(f.type_mime).set('Cache-Control', 'private, max-age=86400');
-    // Les images et les PDF s'ouvrent dans le navigateur ; le reste se télécharge avec son nom d'origine.
-    if (!/^image\/|^application\/pdf$/.test(f.type_mime)) res.attachment(f.nom_original || f.fichier);
+    // Les images et les PDF s'ouvrent dans le navigateur, sauf avec ?telecharger=1 (bouton « Télécharger ») ;
+    // le reste se télécharge toujours avec son nom d'origine.
+    if ('telecharger' in req.query || !/^image\/|^application\/pdf$/.test(f.type_mime)) res.attachment(f.nom_original || f.fichier);
     res.sendFile(path.join(dossier, f.fichier), { dotfiles: 'deny' });
   });
 
