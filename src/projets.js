@@ -165,13 +165,15 @@ export function brancherProjets(app, { db, dossierFichiers }) {
     const fichiers = db.prepare(`
       SELECT f.id, f.nom_original, f.type_mime, f.taille, f.cree_le AS cree_le, f.auteur_id, u.nom AS auteur,
              '/api/projets/' || f.projet_id || '/fichiers/' || f.id AS url, 'dossier' AS source, f.album_id AS album_id,
-             f.legende AS legende
+             f.legende AS legende,
+             CASE WHEN f.dessin IS NULL THEN NULL ELSE '/api/projets/' || f.projet_id || '/photos/dossier/' || f.id || '/dessin?v=' || f.dessin END AS dessin
       FROM projet_fichiers f JOIN utilisateurs u ON u.id = f.auteur_id
       WHERE f.projet_id = ? AND f.dossier = ? ${filtre('f')} ${seulementLesMiens ? 'AND f.auteur_id = ?' : ''}
       ${nomDossier === 'photos' ? `UNION ALL
       SELECT m.id, NULL, m.type_mime, NULL, m.cree_le, m.auteur_id, u.nom,
              '/api/projets/' || m.projet_id || '/messages/' || m.id || '/photo', 'discussion', m.album_id,
-             COALESCE(m.legende, m.texte)
+             COALESCE(m.legende, m.texte),
+             CASE WHEN m.dessin IS NULL THEN NULL ELSE '/api/projets/' || m.projet_id || '/photos/discussion/' || m.id || '/dessin?v=' || m.dessin END
       FROM projet_messages m JOIN utilisateurs u ON u.id = m.auteur_id
       WHERE m.projet_id = ? AND m.fichier IS NOT NULL ${filtre('m')}` : ''}
       ORDER BY cree_le DESC LIMIT 500`).all(...(nomDossier === 'photos' ? [p.id, nomDossier, ...valeurs, p.id, ...valeurs] : [p.id, nomDossier, ...(seulementLesMiens ? [req.utilisateur.id] : [])]));
@@ -291,6 +293,48 @@ export function brancherProjets(app, { db, dossierFichiers }) {
     res.json({ legende: legende || null });
   });
 
+  // Dessin sur une photo : un calque PNG transparent posé par-dessus, la photo d'origine reste intacte.
+  const photoDe = (projetId, source, pid) => {
+    const table = { discussion: 'projet_messages', dossier: 'projet_fichiers' }[source];
+    if (!table) return null;
+    const ligne = db.prepare(`SELECT id, dessin FROM ${table} WHERE id = ? AND projet_id = ? AND fichier IS NOT NULL
+      ${source === 'dossier' ? "AND dossier = 'photos'" : ''}`).get(Number(pid), projetId);
+    return ligne && { table, ...ligne };
+  };
+  const calque = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 6 * 1024 * 1024, files: 1 },
+    fileFilter: (_req, f, cb) => cb(null, f.mimetype === 'image/png'),
+  });
+  app.put('/api/projets/:id/photos/:source/:pid/dessin', exigerConnexion, calque.single('dessin'), (req, res) => {
+    const p = projetOuvert(req, res);
+    if (!p) return;
+    const ph = photoDe(p.id, req.params.source, req.params.pid);
+    if (!ph) return res.status(404).json({ erreur: 'Photo introuvable.' });
+    if (!req.file) return res.status(400).json({ erreur: 'Dessin manquant.' });
+    const fichier = `${crypto.randomUUID()}.png`;
+    fs.writeFileSync(path.join(dossier, fichier), req.file.buffer);
+    db.prepare(`UPDATE ${ph.table} SET dessin = ? WHERE id = ?`).run(fichier, ph.id);
+    if (ph.dessin) fs.rm(path.join(dossier, ph.dessin), { force: true }, () => {});
+    res.json({ dessin: `/api/projets/${p.id}/photos/${req.params.source}/${ph.id}/dessin?v=${fichier}` });
+  });
+  app.delete('/api/projets/:id/photos/:source/:pid/dessin', exigerConnexion, (req, res) => {
+    const p = projetOuvert(req, res);
+    if (!p) return;
+    const ph = photoDe(p.id, req.params.source, req.params.pid);
+    if (!ph) return res.status(404).json({ erreur: 'Photo introuvable.' });
+    db.prepare(`UPDATE ${ph.table} SET dessin = NULL WHERE id = ?`).run(ph.id);
+    if (ph.dessin) fs.rm(path.join(dossier, ph.dessin), { force: true }, () => {});
+    res.status(204).end();
+  });
+  app.get('/api/projets/:id/photos/:source/:pid/dessin', exigerConnexion, (req, res) => {
+    const p = projet(Number(req.params.id));
+    const ph = visible(p, req.utilisateur) && photoDe(p.id, req.params.source, req.params.pid);
+    if (!ph?.dessin) return res.status(404).json({ erreur: 'Dessin introuvable.' });
+    res.type('image/png').set('Cache-Control', 'private, max-age=31536000, immutable')
+      .sendFile(path.join(dossier, ph.dessin), { dotfiles: 'deny' });
+  });
+
   // Scanner : le téléphone envoie les pages photographiées (JPEG), le serveur en fait un PDF du dossier Documents.
   const scan = multer({
     storage: multer.memoryStorage(),
@@ -361,7 +405,7 @@ export function brancherProjets(app, { db, dossierFichiers }) {
       return res.status(404).json({ erreur: 'Fichier introuvable.' });
     }
     db.prepare('DELETE FROM projet_fichiers WHERE id = ?').run(f.id);
-    fs.rm(path.join(dossier, f.fichier), { force: true }, () => {});
+    for (const nom of [f.fichier, f.dessin].filter(Boolean)) fs.rm(path.join(dossier, nom), { force: true }, () => {});
     res.status(204).end();
   });
 
@@ -371,7 +415,7 @@ export function brancherProjets(app, { db, dossierFichiers }) {
       return res.status(404).json({ erreur: 'Message introuvable.' });
     }
     db.prepare('DELETE FROM projet_messages WHERE id = ?').run(m.id);
-    if (m.fichier) fs.rm(path.join(dossier, m.fichier), { force: true }, () => {});
+    for (const nom of [m.fichier, m.dessin].filter(Boolean)) fs.rm(path.join(dossier, nom), { force: true }, () => {});
     res.status(204).end();
   });
 }
