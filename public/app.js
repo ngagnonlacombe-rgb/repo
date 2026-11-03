@@ -1,4 +1,6 @@
 // Interface de l'app employés : une page, routes par ancre (#factures, #bureau, ...).
+import { ArchiveZip } from './zip.js';
+
 const vue = document.getElementById('vue');
 const entete = document.querySelector('.entete');
 let etat = null;
@@ -681,6 +683,74 @@ async function ongletDossier(contenu, p, dossier, moi) {
 // (à la racine, celles qui ne sont pas encore rangées). Le mode « Trier » déplace plusieurs photos d'un coup.
 // PDF des photos d'un projet (ou d'un dossier), de la plus ancienne à la plus récente. Chaque photo est réduite
 // sur le téléphone pour que le PDF reste assez léger pour un courriel.
+// Une photo en JPEG, avec son dessin par-dessus s'il y en a un. maxCote réduit la photo (PDF) ; sinon pleine taille.
+async function jpegDePhoto(f, maxCote = Infinity, qualite = 0.92) {
+  const image = await createImageBitmap(await (await fetch(f.url, { credentials: 'same-origin' })).blob());
+  const echelle = Math.min(1, maxCote / Math.max(image.width, image.height));
+  const toile = document.createElement('canvas');
+  toile.width = Math.round(image.width * echelle);
+  toile.height = Math.round(image.height * echelle);
+  const g = toile.getContext('2d');
+  g.fillStyle = '#ffffff'; // fond blanc : une photo PNG transparente ne devient pas noire en JPEG
+  g.fillRect(0, 0, toile.width, toile.height);
+  g.drawImage(image, 0, 0, toile.width, toile.height);
+  image.close?.();
+  if (f.dessin) {
+    try {
+      g.drawImage(await createImageBitmap(await (await fetch(f.dessin, { credentials: 'same-origin' })).blob()), 0, 0, toile.width, toile.height);
+    } catch { /* dessin illisible : la photo part sans lui */ }
+  }
+  const jpeg = await new Promise((ok) => toile.toBlob(ok, 'image/jpeg', qualite));
+  if (!jpeg) throw new Error('Impossible de convertir cette photo en JPG sur cet appareil.');
+  return jpeg;
+}
+
+const sansCaracteresInterdits = (nom) => nom.replace(/[\\/:*?"<>|]/g, '-').trim();
+// « Sinistre Tremblay - 2026-10-19 14h48 » : le nom de projet et la date de la photo.
+function nomPhoto(projet, f) {
+  const d = dateSql(f.cree_le);
+  const deux = (n) => String(n).padStart(2, '0');
+  return sansCaracteresInterdits(`${projet.nom} - ${d.getFullYear()}-${deux(d.getMonth() + 1)}-${deux(d.getDate())} ${deux(d.getHours())}h${deux(d.getMinutes())}`);
+}
+
+function enregistrerFichier(blob, nom) {
+  const lien = document.createElement('a');
+  lien.href = URL.createObjectURL(blob);
+  lien.download = nom;
+  document.body.append(lien);
+  lien.click();
+  lien.remove();
+  setTimeout(() => URL.revokeObjectURL(lien.href), 60000);
+}
+
+async function telechargerJpeg(projet, f) {
+  enregistrerFichier(await jpegDePhoto(f), `${nomPhoto(projet, f)}.jpg`);
+}
+
+// Toutes les photos (ou celles d'un dossier) en JPG dans un ZIP. Pour tout le projet, chaque dossier de photos
+// devient un dossier dans le ZIP. Les noms en double reçoivent (2), (3)…
+async function zipDesPhotos(projet, album, albums, progres) {
+  const { fichiers } = await api(`/api/projets/${projet.id}/dossiers/photos${album ? `?album=${album.id}` : ''}`);
+  if (!fichiers.length) throw new Error('Aucune photo dans ce dossier.');
+  const nomsAlbums = new Map(albums.map((a) => [a.id, sansCaracteresInterdits(a.nom) || `Dossier ${a.id}`]));
+  const zip = new ArchiveZip();
+  const pris = new Set();
+  for (const [i, f] of fichiers.reverse().entries()) {
+    progres(`Préparation ${i + 1} / ${fichiers.length}…`);
+    let jpeg;
+    try { jpeg = await jpegDePhoto(f); } catch { continue; } // photo illisible : on passe à la suivante
+    const dossier = album ? '' : `${f.album_id ? nomsAlbums.get(f.album_id) || 'Non classées' : 'Non classées'}/`;
+    const base = `${dossier}${nomPhoto(projet, f)}`;
+    let chemin = `${base}.jpg`;
+    for (let n = 2; pris.has(chemin); n += 1) chemin = `${base} (${n}).jpg`;
+    pris.add(chemin);
+    await zip.ajouter(chemin, jpeg, dateSql(f.cree_le));
+  }
+  if (!zip.nombre) throw new Error('Impossible de lire les photos sur cet appareil.');
+  const nom = sansCaracteresInterdits(`${projet.nom}${album ? ` - ${album.nom}` : ' - Photos'}`);
+  return new File([zip.blob()], `${nom}.zip`, { type: 'application/zip' });
+}
+
 async function pdfDesPhotos(idProjet, idAlbum, nom, progres) {
   const { fichiers } = await api(`/api/projets/${idProjet}/dossiers/photos${idAlbum ? `?album=${idAlbum}` : ''}`);
   if (!fichiers.length) throw new Error('Aucune photo dans ce dossier.');
@@ -690,25 +760,10 @@ async function pdfDesPhotos(idProjet, idAlbum, nom, progres) {
   for (const [i, f] of fichiers.reverse().entries()) {
     progres(`Préparation ${i + 1} / ${fichiers.length}…`);
     try {
-      const image = await createImageBitmap(await (await fetch(f.url, { credentials: 'same-origin' })).blob());
-      const echelle = Math.min(1, 1600 / Math.max(image.width, image.height));
-      const toile = document.createElement('canvas');
-      toile.width = Math.round(image.width * echelle);
-      toile.height = Math.round(image.height * echelle);
-      const g = toile.getContext('2d');
-      g.drawImage(image, 0, 0, toile.width, toile.height);
-      if (f.dessin) {
-        try {
-          g.drawImage(await createImageBitmap(await (await fetch(f.dessin, { credentials: 'same-origin' })).blob()), 0, 0, toile.width, toile.height);
-        } catch { /* dessin illisible : la photo part sans lui */ }
-      }
-      const jpeg = await new Promise((ok) => toile.toBlob(ok, 'image/jpeg', 0.75));
-      if (jpeg) {
-        donnees.append('photos', jpeg, `photo-${i + 1}.jpg`);
-        const date = dateSql(f.cree_le).toLocaleString('fr-CA', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-        legendes.push({ meta: `${date} · ${f.auteur}`, note: f.legende || '' });
-        nb += 1;
-      }
+      donnees.append('photos', await jpegDePhoto(f, 1600, 0.75), `photo-${i + 1}.jpg`);
+      const date = dateSql(f.cree_le).toLocaleString('fr-CA', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+      legendes.push({ meta: `${date} · ${f.auteur}`, note: f.legende || '' });
+      nb += 1;
     } catch { /* photo illisible par ce téléphone : on passe à la suivante */ }
   }
   if (!nb) throw new Error('Impossible de lire les photos sur ce téléphone.');
@@ -733,6 +788,7 @@ function visionneuse(p, photos, depart, rafraichir) {
   boite.setAttribute('role', 'dialog');
   boite.innerHTML = `
     <div class="vis-haut"><span id="vis-position"></span><span id="vis-auteur" class="vis-doux"></span>
+      <button type="button" class="vis-bouton" id="vis-jpg">⬇️ JPG</button>
       <button type="button" class="vis-bouton" id="vis-fermer" aria-label="Fermer">✕</button></div>
     <div class="vis-scene">
       <button type="button" class="vis-nav" id="vis-prec" aria-label="Photo précédente">‹</button>
@@ -796,6 +852,7 @@ function visionneuse(p, photos, depart, rafraichir) {
   }
   document.addEventListener('keydown', clavier);
   $('vis-fermer').onclick = fermer;
+  $('vis-jpg').onclick = (e) => occuper(e.currentTarget, () => telechargerJpeg(p, actuelle()));
   $('vis-prec').onclick = () => aller(-1);
   $('vis-suiv').onclick = () => aller(1);
   // Glisser du doigt vers la gauche ou la droite (hors mode dessin).
@@ -951,6 +1008,7 @@ async function ongletPhotos(contenu, p, moi, albumId) {
       </div>`}
     ${p.actif ? `<input type="file" id="fichier-dossier" accept="image/*" multiple hidden>
       <button class="pleine" type="button" id="btn-deposer">${album ? `Ajouter des photos dans « ${h(album.nom)} »` : 'Ajouter des photos'}</button>` : ''}
+    <button class="secondaire pleine" type="button" id="btn-zip">🗂️ ${album ? `Télécharger « ${h(album.nom)} » en JPG (ZIP)` : 'Télécharger toutes les photos en JPG (ZIP)'}</button>
     <button class="secondaire pleine" type="button" id="btn-pdf">📄 ${album ? `Télécharger « ${h(album.nom)} » en PDF` : 'Télécharger toutes les photos en PDF'}</button>
     <div id="pdf-pret"></div>
     <div class="entete-photos"><h3>${album ? 'Photos du dossier' : (albums.length ? 'Photos non classées' : 'Photos')}</h3>
@@ -969,7 +1027,7 @@ async function ongletPhotos(contenu, p, moi, albumId) {
 
   const btnPdf = document.getElementById('btn-pdf');
   btnPdf.addEventListener('click', () => occuper(btnPdf, async () => {
-    const nom = `${p.nom}${album ? ` - ${album.nom}` : ' - Photos'}`.replace(/[\\/:*?"<>|]/g, '-');
+    const nom = sansCaracteresInterdits(`${p.nom}${album ? ` - ${album.nom}` : ' - Photos'}`);
     const fichier = await pdfDesPhotos(p.id, album?.id, nom, (texte) => { btnPdf.textContent = texte; });
     const pret = document.getElementById('pdf-pret');
     if (!pret) return;
@@ -982,6 +1040,14 @@ async function ongletPhotos(contenu, p, moi, albumId) {
     document.getElementById('btn-partager-pdf')?.addEventListener('click', () => {
       navigator.share({ files: [fichier], title: fichier.name }).catch(() => {});
     });
+  }));
+
+  const btnZip = document.getElementById('btn-zip');
+  btnZip.addEventListener('click', () => occuper(btnZip, async () => {
+    const fichier = await zipDesPhotos(p, album, albums, (texte) => { btnZip.textContent = texte; });
+    btnZip.textContent = 'Téléchargement…';
+    enregistrerFichier(fichier, fichier.name);
+    avis(`${fichier.name} téléchargé (${taille(fichier.size)}).`);
   }));
 
   const nommer = (actuel) => {
@@ -1009,6 +1075,7 @@ async function ongletPhotos(contenu, p, moi, albumId) {
           <span class="coche" aria-hidden="true">✓</span>
           <figcaption class="doux">${f.legende ? `<span class="legende">${h(f.legende)}</span>` : ''}
             ${h(f.auteur)} · ${heure(f.cree_le)}${f.source === 'discussion' ? ' · discussion' : ''}
+            <button class="lien" type="button" data-jpg="${i}">Télécharger en JPG</button>
             ${p.actif ? `<button class="lien" type="button" data-annoter="${f.source}:${f.id}">${f.legende ? 'Modifier la note' : 'Ajouter une note'}</button>` : ''}
             ${effacable(f) ? `<button class="lien" type="button" data-effacer="${f.id}">Effacer</button>` : ''}</figcaption>
         </figure>`).join('')}</div>`;
@@ -1109,6 +1176,11 @@ async function ongletPhotos(contenu, p, moi, albumId) {
     if (ouvrir) {
       e.preventDefault();
       visionneuse(p, photosAffichees, Number(ouvrir.dataset.ouvrir), afficher);
+      return;
+    }
+    const jpg = e.target.closest('[data-jpg]');
+    if (jpg) {
+      occuper(jpg, () => telechargerJpeg(p, photosAffichees[Number(jpg.dataset.jpg)]));
       return;
     }
     const annoter = e.target.closest('[data-annoter]');
