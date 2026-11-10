@@ -151,6 +151,26 @@ export function ouvrirBase(fichier) {
       PRIMARY KEY (employe_id, jour)
     );
 
+    -- Calendrier : un bloc de travail planifié (un projet ou autre chose) sur un ou plusieurs jours, avec son équipe.
+    CREATE TABLE IF NOT EXISTS planifications (
+      id INTEGER PRIMARY KEY,
+      projet_id INTEGER REFERENCES projets(id) ON DELETE CASCADE,
+      titre TEXT,
+      date_debut TEXT NOT NULL,
+      date_fin TEXT NOT NULL,
+      heure_debut TEXT,
+      heure_fin TEXT,
+      note TEXT,
+      cree_par INTEGER REFERENCES utilisateurs(id),
+      cree_le TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS planifications_dates ON planifications (date_debut, date_fin);
+    CREATE TABLE IF NOT EXISTS planification_employes (
+      planification_id INTEGER NOT NULL REFERENCES planifications(id) ON DELETE CASCADE,
+      employe_id INTEGER NOT NULL REFERENCES utilisateurs(id) ON DELETE CASCADE,
+      PRIMARY KEY (planification_id, employe_id)
+    );
+
     CREATE TABLE IF NOT EXISTS reglages (
       cle TEXT PRIMARY KEY,
       valeur TEXT NOT NULL
