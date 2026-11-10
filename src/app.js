@@ -14,6 +14,7 @@ import { brancherMessagerie } from './messagerie.js';
 import { creerNotifieur } from './notifications.js';
 import { brancherPunch } from './punch.js';
 import { brancherBanques } from './banques.js';
+import { brancherCalendrier } from './calendrier.js';
 
 const TYPES_ACCEPTES = {
   'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'application/pdf': 'pdf',
@@ -359,6 +360,7 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
   notifieur.brancher(app);
   brancherMessagerie(app, { db, dossierFichiers, notifieur });
   brancherPunch(app, { db });
+  brancherCalendrier(app, { db });
   brancherBanques(app, { db });
 
   app.use('/api', (_req, res) => res.status(404).json({ erreur: 'Adresse inconnue.' }));

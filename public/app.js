@@ -77,6 +77,7 @@ function route() {
   if (ancre === 'projets' || ancre === 'projets/archives') return vueProjets(ancre === 'projets/archives');
   if (ancre === 'messages') return u.role === 'bureau' ? vueConversations() : vueMessagerie();
   if (ancre.startsWith('messages/') && u.role === 'bureau') return vueMessagerie(Number(ancre.split('/')[1]));
+  if ((ancre === 'calendrier' || ancre.startsWith('calendrier/')) && peutPlanifier()) return vueCalendrier(ancre.split('/')[1]);
   if (ancre.startsWith('projet/')) return vueProjet(Number(ancre.split('/')[1]), ancre.split('/')[2], Number(ancre.split('/')[3]) || 0);
   if (u.role === 'bureau') {
     if (requete?.includes('qbo=ok')) avis('QuickBooks est connecté.');
@@ -150,6 +151,9 @@ function vuePremierCompte() {
 }
 
 // ---------- Employé ----------
+// Le bureau et les chargés de projet planifient les projets dans le calendrier.
+const peutPlanifier = () => etat.utilisateur?.role === 'bureau' || Boolean(etat.utilisateur?.chef_projet);
+
 function ongletsBureau(actif) {
   const lien = (ancre, texte) => `<a href="#${ancre}" ${actif === ancre ? 'aria-current="page"' : ''}>${texte}</a>`;
   const messages = lien('messages', 'Messages <span class="compteur" data-non-lus hidden></span>');
@@ -159,13 +163,13 @@ function ongletsBureau(actif) {
     majNonLus();
   });
   if (etat.utilisateur.role !== 'bureau') {
-    return `<nav class="onglets">${lien('punch', 'Punch')}${lien('factures', 'Mes factures')}${lien('projets', 'Projets')}${messages}</nav>`;
+    return `<nav class="onglets">${lien('punch', 'Punch')}${lien('factures', 'Mes factures')}${lien('projets', 'Projets')}${peutPlanifier() ? lien('calendrier', 'Calendrier') : ''}${messages}</nav>`;
   }
   // Bureau : 4 grands onglets ; Factures et Employés ont leurs sous-onglets juste en dessous.
   const groupe = Object.keys(SOUS_ONGLETS).find((g) => SOUS_ONGLETS[g].some(([ancre]) => ancre === actif));
   const principal = (g, ancre, texte) => `<a href="#${ancre}" ${groupe === g || actif === g ? 'aria-current="page"' : ''}>${texte}</a>`;
   return `<nav class="onglets">
-    ${principal('factures', 'bureau/en_attente', 'Factures')}${messages}${principal('employes', 'heures', 'Employés')}${lien('projets', 'Projets')}
+    ${principal('factures', 'bureau/en_attente', 'Factures')}${messages}${principal('employes', 'heures', 'Employés')}${lien('projets', 'Projets')}${lien('calendrier', 'Calendrier')}
   </nav>${groupe ? `<nav class="sous-onglets">${SOUS_ONGLETS[groupe].map(([ancre, texte]) => lien(ancre, texte)).join('')}</nav>` : ''}`;
 }
 
@@ -1900,6 +1904,175 @@ async function vueEmployes() {
       avis('Mot de passe changé.');
     });
   }));
+}
+
+// ---------- Calendrier ----------
+// Vue du mois (lundi en premier) : chaque jour montre les projets planifiés ; toucher un jour affiche le détail
+// en dessous, avec l'équipe et le bouton pour planifier. Un bloc peut couvrir plusieurs jours.
+const COULEURS_CAL = ['#e8590c', '#1c7ed6', '#2f9e44', '#ae3ec9', '#f08c00', '#0c8599', '#d6336c', '#5c940d'];
+const jourIso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const dateLocale = (iso) => new Date(`${iso}T12:00:00`);
+const couleurPlanif = (pl) => {
+  const cle = pl.projet_id ? String(pl.projet_id) : pl.titre || '';
+  let n = 0;
+  for (const c of cle) n = (n * 31 + c.charCodeAt(0)) % 9973;
+  return COULEURS_CAL[n % COULEURS_CAL.length];
+};
+// « 07:00 » devient « 7 h », « 15:30 » devient « 15 h 30 ».
+const heureCal = (t) => `${Number(t.slice(0, 2))} h${t.slice(3) === '00' ? '' : ` ${t.slice(3)}`}`;
+const heuresPlanif = (pl) => {
+  if (pl.heure_debut && pl.heure_fin) return `${heureCal(pl.heure_debut)} à ${heureCal(pl.heure_fin)}`;
+  if (pl.heure_debut) return `À partir de ${heureCal(pl.heure_debut)}`;
+  return pl.heure_fin ? `Jusqu'à ${heureCal(pl.heure_fin)}` : 'Toute la journée';
+};
+let jourCalendrier = null;
+
+async function vueCalendrier(mois) {
+  const aujourdhui = jourIso(new Date());
+  if (!/^\d{4}-\d{2}$/.test(mois || '')) mois = (jourCalendrier || aujourdhui).slice(0, 7);
+  if (!jourCalendrier?.startsWith(mois)) jourCalendrier = aujourdhui.startsWith(mois) ? aujourdhui : `${mois}-01`;
+  const premier = dateLocale(`${mois}-01`);
+  const debutGrille = new Date(premier);
+  debutGrille.setDate(1 - ((premier.getDay() + 6) % 7));
+  const jours = Array.from({ length: 42 }, (_, i) => { const d = new Date(debutGrille); d.setDate(d.getDate() + i); return jourIso(d); });
+  while (jours.length > 35 && !jours[jours.length - 7].startsWith(mois)) jours.splice(-7);
+  const decaler = (n) => { const d = new Date(premier); d.setMonth(d.getMonth() + n); return jourIso(d).slice(0, 7); };
+  const titreMois = premier.toLocaleDateString('fr-CA', { month: 'long', year: 'numeric' });
+
+  vue.innerHTML = `${ongletsBureau('calendrier')}
+    <div class="cal-entete">
+      <a class="bouton secondaire" href="#calendrier/${decaler(-1)}" aria-label="Mois précédent">‹</a>
+      <h1>${titreMois.charAt(0).toUpperCase() + titreMois.slice(1)}</h1>
+      <a class="bouton secondaire" href="#calendrier/${decaler(1)}" aria-label="Mois suivant">›</a>
+      ${aujourdhui.startsWith(mois) ? '' : `<a class="lien-aujourdhui" href="#calendrier/${aujourdhui.slice(0, 7)}">Aujourd'hui</a>`}
+    </div>
+    <div id="contenu"><p class="vide">Chargement…</p></div>`;
+  const [{ planifications }, { projets }, { equipe }] = await Promise.all([
+    api(`/api/calendrier?du=${jours[0]}&au=${jours[jours.length - 1]}`), api('/api/projets'), api('/api/calendrier/equipe'),
+  ]);
+  const contenu = document.getElementById('contenu');
+  if (!contenu) return;
+  const duJour = (j) => planifications.filter((pl) => pl.date_debut <= j && pl.date_fin >= j);
+
+  function grille() {
+    return `<div class="cal-grille" role="grid">
+      ${['lun', 'mar', 'mer', 'jeu', 'ven', 'sam', 'dim'].map((j) => `<div class="cal-jsem">${j}</div>`).join('')}
+      ${jours.map((j) => {
+        const liste = duJour(j);
+        return `<button type="button" class="cal-jour${j.startsWith(mois) ? '' : ' hors-mois'}${j === aujourdhui ? ' aujourdhui' : ''}${j === jourCalendrier ? ' choisi' : ''}" data-jour="${j}"
+          aria-label="${dateLocale(j).toLocaleDateString('fr-CA', { weekday: 'long', day: 'numeric', month: 'long' })}, ${liste.length} planification(s)">
+          <span class="cal-num">${Number(j.slice(8))}</span>
+          ${liste.slice(0, 3).map((pl) => `<span class="cal-puce" style="--c:${couleurPlanif(pl)}">${h(pl.projet_nom || pl.titre)}</span>`).join('')}
+          ${liste.length > 3 ? `<span class="cal-plus">+${liste.length - 3}</span>` : ''}
+        </button>`;
+      }).join('')}
+    </div>`;
+  }
+
+  function detailJour() {
+    const liste = duJour(jourCalendrier);
+    const titre = dateLocale(jourCalendrier).toLocaleDateString('fr-CA', { weekday: 'long', day: 'numeric', month: 'long' });
+    return `<div class="cal-detail">
+      <h2>${titre.charAt(0).toUpperCase() + titre.slice(1)}</h2>
+      <div class="carte"><ul class="liste">${liste.length ? liste.map((pl) => `
+        <li class="cal-planif" style="--c:${couleurPlanif(pl)}">
+          <div class="infos">
+            <strong>${pl.projet_id ? `<a href="#projet/${pl.projet_id}">${h(pl.projet_nom)}</a>${pl.titre ? ` · ${h(pl.titre)}` : ''}` : h(pl.titre)}</strong>
+            <div class="doux">${heuresPlanif(pl)}${pl.date_debut !== pl.date_fin
+              ? ` · du ${dateLocale(pl.date_debut).toLocaleDateString('fr-CA', { day: 'numeric', month: 'short' })} au ${dateLocale(pl.date_fin).toLocaleDateString('fr-CA', { day: 'numeric', month: 'short' })}` : ''}</div>
+            ${pl.projet_adresse ? `<div class="doux">📍 ${h(pl.projet_adresse)}</div>` : ''}
+            <div>${pl.equipe.length ? `👷 ${pl.equipe.map((e) => h(e.nom)).join(', ')}` : '<span class="doux">Aucune équipe assignée</span>'}</div>
+            ${pl.note ? `<div class="cal-note">${h(pl.note)}</div>` : ''}
+          </div>
+          <button class="secondaire" type="button" data-modifier="${pl.id}">Modifier</button>
+        </li>`).join('') : '<li class="vide">Rien de planifié cette journée.</li>'}</ul></div>
+      <button class="pleine" type="button" id="btn-planifier">+ Planifier le ${dateLocale(jourCalendrier).toLocaleDateString('fr-CA', { day: 'numeric', month: 'long' })}</button>
+      <div id="cal-formulaire"></div>
+    </div>`;
+  }
+
+  function afficher() {
+    contenu.innerHTML = grille() + detailJour();
+  }
+
+  function formulaire(pl) {
+    const zone = document.getElementById('cal-formulaire');
+    const choisis = new Set((pl?.equipe || []).map((e) => e.id));
+    const projetsActifs = projets.some((p) => p.id === pl?.projet_id) || !pl?.projet_id
+      ? projets : [...projets, { id: pl.projet_id, nom: pl.projet_nom }];
+    zone.innerHTML = `<form class="carte" id="f-planif">
+      <h3>${pl ? 'Modifier la planification' : 'Nouvelle planification'}</h3>
+      <label for="cp-projet">Projet</label>
+      <select id="cp-projet" name="projet_id">
+        <option value="">— Autre (sans projet) —</option>
+        ${projetsActifs.map((p) => `<option value="${p.id}" ${p.id === pl?.projet_id ? 'selected' : ''}>${h(p.nom)}</option>`).join('')}
+      </select>
+      <label for="cp-titre">Tâche ou titre <span class="doux">(facultatif avec un projet)</span></label>
+      <input id="cp-titre" name="titre" maxlength="150" placeholder="Ex. : Démolition, Livraison, Visite d'estimation" value="${h(pl?.titre || '')}">
+      <div class="grille2">
+        <div><label for="cp-du">Du</label><input id="cp-du" name="date_debut" type="date" required value="${pl?.date_debut || jourCalendrier}"></div>
+        <div><label for="cp-au">Au</label><input id="cp-au" name="date_fin" type="date" required value="${pl?.date_fin || jourCalendrier}"></div>
+        <div><label for="cp-hd">De <span class="doux">(facultatif)</span></label><input id="cp-hd" name="heure_debut" type="time" value="${pl?.heure_debut || ''}"></div>
+        <div><label for="cp-hf">À <span class="doux">(facultatif)</span></label><input id="cp-hf" name="heure_fin" type="time" value="${pl?.heure_fin || ''}"></div>
+      </div>
+      <label>Équipe</label>
+      <div class="cal-equipe">${equipe.map((e) => `<label class="case"><input type="checkbox" name="equipe" value="${e.id}" ${choisis.has(e.id) ? 'checked' : ''}> ${h(e.nom)}</label>`).join('')}</div>
+      <label for="cp-note">Note <span class="doux">(facultatif)</span></label>
+      <textarea id="cp-note" name="note" maxlength="2000" placeholder="Matériel, accès au chantier, client à appeler…">${h(pl?.note || '')}</textarea>
+      <div class="actions">
+        <button type="submit">Enregistrer</button>
+        <button class="secondaire" type="button" id="cp-annuler">Annuler</button>
+        ${pl ? '<button class="danger" type="button" id="cp-supprimer">Supprimer</button>' : ''}
+      </div>
+    </form>`;
+    const form = document.getElementById('f-planif');
+    form.querySelector('#cp-du').addEventListener('change', (e) => {
+      const au = form.querySelector('#cp-au');
+      if (!au.value || au.value < e.target.value) au.value = e.target.value;
+    });
+    form.querySelector('#cp-annuler').onclick = () => { zone.innerHTML = ''; };
+    form.querySelector('#cp-supprimer')?.addEventListener('click', (e) => {
+      if (!confirm('Supprimer cette planification ?')) return;
+      occuper(e.currentTarget, async () => {
+        await api(`/api/calendrier/${pl.id}`, { method: 'DELETE' });
+        avis('Planification supprimée.');
+        vueCalendrier(mois);
+      });
+    });
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const donnees = new FormData(form);
+      const json = {
+        projet_id: Number(donnees.get('projet_id')) || null, titre: donnees.get('titre'),
+        date_debut: donnees.get('date_debut'), date_fin: donnees.get('date_fin'),
+        heure_debut: donnees.get('heure_debut'), heure_fin: donnees.get('heure_fin'), note: donnees.get('note'),
+        equipe: donnees.getAll('equipe').map(Number),
+      };
+      occuper(form.querySelector('button[type="submit"]'), async () => {
+        const r = await api(pl ? `/api/calendrier/${pl.id}` : '/api/calendrier', { method: pl ? 'PATCH' : 'POST', json });
+        jourCalendrier = r.planification.date_debut;
+        avis(pl ? 'Planification modifiée.' : 'Planifié.');
+        const nouveauMois = jourCalendrier.slice(0, 7);
+        if (location.hash === `#calendrier/${nouveauMois}`) vueCalendrier(nouveauMois);
+        else location.hash = `calendrier/${nouveauMois}`;
+      });
+    });
+    form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  contenu.onclick = (e) => {
+    const jour = e.target.closest('[data-jour]');
+    if (jour) {
+      jourCalendrier = jour.dataset.jour;
+      if (!jourCalendrier.startsWith(mois)) { location.hash = `calendrier/${jourCalendrier.slice(0, 7)}`; return; }
+      afficher();
+      return;
+    }
+    if (e.target.closest('#btn-planifier')) { formulaire(null); return; }
+    const modifier = e.target.closest('[data-modifier]');
+    if (modifier) formulaire(planifications.find((pl) => pl.id === Number(modifier.dataset.modifier)));
+  };
+  afficher();
 }
 
 demarrer().catch((e) => { vue.innerHTML = `<div class="bandeau erreur">${h(e.message)}</div>`; });
