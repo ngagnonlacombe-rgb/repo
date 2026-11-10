@@ -15,6 +15,7 @@ import { creerNotifieur } from './notifications.js';
 import { brancherPunch } from './punch.js';
 import { brancherBanques } from './banques.js';
 import { brancherCalendrier } from './calendrier.js';
+import { brancherSoumissions } from './soumissions.js';
 
 const TYPES_ACCEPTES = {
   'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'application/pdf': 'pdf',
@@ -80,7 +81,8 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
     }
     const erreur = validerCompte({ nom, identifiant, motDePasse, role: 'bureau' });
     if (erreur) return res.status(400).json({ erreur });
-    const { lastInsertRowid } = db.prepare('INSERT INTO utilisateurs (nom, identifiant, hash, role) VALUES (?, ?, ?, ?)')
+    // Le premier compte du bureau a aussi accès aux soumissions.
+    const { lastInsertRowid } = db.prepare('INSERT INTO utilisateurs (nom, identifiant, hash, role, soumissions) VALUES (?, ?, ?, ?, 1)')
       .run(nom.trim(), identifiant.trim(), hacher(motDePasse), 'bureau');
     poserCookie(res, creerSession(db, Number(lastInsertRowid)), production);
     res.status(201).json({ ok: true });
@@ -98,7 +100,7 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
     }
     limiteur.reussite(identifiant);
     poserCookie(res, creerSession(db, u.id), production);
-    res.json({ utilisateur: { id: u.id, nom: u.nom, identifiant: u.identifiant, role: u.role, chef_projet: u.chef_projet } });
+    res.json({ utilisateur: { id: u.id, nom: u.nom, identifiant: u.identifiant, role: u.role, chef_projet: u.chef_projet, soumissions: u.soumissions } });
   });
 
   app.post('/api/deconnexion', (req, res) => {
@@ -276,7 +278,7 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
 
   // ---------- Bureau : employés ----------
   app.get('/api/bureau/utilisateurs', exigerConnexion, exigerBureau, (_req, res) => {
-    res.json({ utilisateurs: db.prepare(`SELECT id, nom, identifiant, role, actif, chef_projet FROM utilisateurs
+    res.json({ utilisateurs: db.prepare(`SELECT id, nom, identifiant, role, actif, chef_projet, soumissions FROM utilisateurs
       WHERE supprime = 0 ORDER BY actif DESC, nom`).all() });
   });
 
@@ -286,7 +288,7 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
     const u = db.prepare('SELECT * FROM utilisateurs WHERE id = ? AND supprime = 0').get(Number(req.params.id));
     if (!u) return res.status(404).json({ erreur: 'Utilisateur introuvable.' });
     if (u.id === req.utilisateur.id) return res.status(400).json({ erreur: 'Tu ne peux pas supprimer ton propre compte.' });
-    db.prepare(`UPDATE utilisateurs SET supprime = 1, actif = 0, chef_projet = 0, identifiant = identifiant || '~supprime-' || id
+    db.prepare(`UPDATE utilisateurs SET supprime = 1, actif = 0, chef_projet = 0, soumissions = 0, identifiant = identifiant || '~supprime-' || id
       WHERE id = ?`).run(u.id);
     db.prepare('DELETE FROM sessions WHERE utilisateur_id = ?').run(u.id);
     db.prepare('DELETE FROM push_abonnements WHERE utilisateur_id = ?').run(u.id);
@@ -308,7 +310,7 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
   app.patch('/api/bureau/utilisateurs/:id', exigerConnexion, exigerBureau, (req, res) => {
     const u = db.prepare('SELECT * FROM utilisateurs WHERE id = ? AND supprime = 0').get(Number(req.params.id));
     if (!u) return res.status(404).json({ erreur: 'Utilisateur introuvable.' });
-    const { actif, motDePasse, chef_projet: chefProjet } = req.body || {};
+    const { actif, motDePasse, chef_projet: chefProjet, soumissions } = req.body || {};
     if (u.id === req.utilisateur.id && actif === false) {
       return res.status(400).json({ erreur: 'Tu ne peux pas désactiver ton propre accès.' });
     }
@@ -324,6 +326,9 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
     }
     if (typeof chefProjet === 'boolean') {
       db.prepare('UPDATE utilisateurs SET chef_projet = ? WHERE id = ?').run(chefProjet ? 1 : 0, u.id);
+    }
+    if (typeof soumissions === 'boolean') {
+      db.prepare('UPDATE utilisateurs SET soumissions = ? WHERE id = ?').run(soumissions ? 1 : 0, u.id);
     }
     res.json({ ok: true });
   });
@@ -361,6 +366,7 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
   brancherMessagerie(app, { db, dossierFichiers, notifieur });
   brancherPunch(app, { db });
   brancherCalendrier(app, { db });
+  brancherSoumissions(app, { db });
   brancherBanques(app, { db });
 
   app.use('/api', (_req, res) => res.status(404).json({ erreur: 'Adresse inconnue.' }));

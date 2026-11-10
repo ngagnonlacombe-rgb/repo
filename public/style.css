@@ -222,3 +222,19 @@ body.sans-defilement { overflow: hidden; }
 @media (min-width: 720px) { .cal-jour { min-height: 96px; } .cal-puce { font-size: 12px; line-height: 18px; } }
 #f-planif .grille2 > div { min-width: 0; }
 #f-planif input[type="date"], #f-planif input[type="time"] { min-width: 0; }
+
+/* Soumissions */
+.soum-droite { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.soum-ligne { border-top: 1px solid var(--bord); padding: 12px 0; }
+.soum-ligne:first-child { border-top: 0; padding-top: 0; }
+.soum-chiffres { display: grid; grid-template-columns: 1fr 1fr 1.3fr 1.3fr; gap: 0 8px; }
+.soum-chiffres > div { min-width: 0; }
+.soum-chiffres label { margin-top: 6px; }
+.soum-montant span { display: block; padding: 10px 0; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+.soum-retirer { color: var(--danger) !important; font-size: 14px; margin-top: 6px; }
+.soum-totaux { display: grid; grid-template-columns: 1fr auto; gap: 4px 16px; margin: 16px 0 0; font-variant-numeric: tabular-nums; }
+.soum-totaux dt { text-align: right; color: var(--doux); }
+.soum-totaux dd { margin: 0; text-align: right; min-width: 110px; }
+.soum-totaux .total { font-weight: 700; font-size: 18px; color: var(--texte); border-top: 2px solid var(--accent); padding-top: 4px; }
+#f-soumission h3 { margin: 0 0 4px; }
+@media (max-width: 480px) { .soum-chiffres { grid-template-columns: 1fr 1fr; } }

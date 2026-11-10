@@ -171,6 +171,31 @@ export function ouvrirBase(fichier) {
       PRIMARY KEY (planification_id, employe_id)
     );
 
+    -- Soumissions aux clients ; les lignes (description, quantité, unité, prix) sont gardées en JSON.
+    CREATE TABLE IF NOT EXISTS soumissions (
+      id INTEGER PRIMARY KEY,
+      numero TEXT NOT NULL UNIQUE,
+      statut TEXT NOT NULL DEFAULT 'brouillon' CHECK (statut IN ('brouillon', 'envoyee', 'acceptee', 'refusee')),
+      projet_id INTEGER REFERENCES projets(id) ON DELETE SET NULL,
+      client_nom TEXT,
+      client_adresse TEXT,
+      client_courriel TEXT,
+      client_telephone TEXT,
+      adresse_travaux TEXT,
+      titre TEXT,
+      date_soumission TEXT NOT NULL,
+      validite_jours INTEGER NOT NULL DEFAULT 30,
+      lignes TEXT NOT NULL DEFAULT '[]',
+      notes TEXT,
+      sous_total REAL NOT NULL DEFAULT 0,
+      tps REAL NOT NULL DEFAULT 0,
+      tvq REAL NOT NULL DEFAULT 0,
+      total REAL NOT NULL DEFAULT 0,
+      cree_par INTEGER REFERENCES utilisateurs(id),
+      cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+      maj_le TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS reglages (
       cle TEXT PRIMARY KEY,
       valeur TEXT NOT NULL
@@ -215,6 +240,10 @@ export function ouvrirBase(fichier) {
   // Chargé de projet : un employé qui peut créer des projets.
   if (!db.prepare('PRAGMA table_info(utilisateurs)').all().some((c) => c.name === 'chef_projet')) {
     db.exec('ALTER TABLE utilisateurs ADD COLUMN chef_projet INTEGER NOT NULL DEFAULT 0');
+  }
+  // Accès à l'onglet Soumissions, donné compte par compte par le bureau. Au départ, les comptes du bureau l'ont.
+  if (!db.prepare('PRAGMA table_info(utilisateurs)').all().some((c) => c.name === 'soumissions')) {
+    db.exec("ALTER TABLE utilisateurs ADD COLUMN soumissions INTEGER NOT NULL DEFAULT 0; UPDATE utilisateurs SET soumissions = 1 WHERE role = 'bureau'");
   }
   // Lien de partage du plan magicplan d'un projet.
   if (!db.prepare('PRAGMA table_info(projets)').all().some((c) => c.name === 'magicplan_url')) {

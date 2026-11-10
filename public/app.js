@@ -78,6 +78,11 @@ function route() {
   if (ancre === 'messages') return u.role === 'bureau' ? vueConversations() : vueMessagerie();
   if (ancre.startsWith('messages/') && u.role === 'bureau') return vueMessagerie(Number(ancre.split('/')[1]));
   if ((ancre === 'calendrier' || ancre.startsWith('calendrier/')) && peutPlanifier()) return vueCalendrier(ancre.split('/')[1]);
+  if (etat.utilisateur.soumissions) {
+    if (ancre === 'soumissions') return vueSoumissions();
+    if (ancre === 'soumissions/entreprise') return vueEntreprise();
+    if (ancre.startsWith('soumission/')) return vueSoumission(ancre.split('/')[1]);
+  }
   if (ancre.startsWith('projet/')) return vueProjet(Number(ancre.split('/')[1]), ancre.split('/')[2], Number(ancre.split('/')[3]) || 0);
   if (u.role === 'bureau') {
     if (requete?.includes('qbo=ok')) avis('QuickBooks est connecté.');
@@ -157,19 +162,21 @@ const peutPlanifier = () => etat.utilisateur?.role === 'bureau' || Boolean(etat.
 function ongletsBureau(actif) {
   const lien = (ancre, texte) => `<a href="#${ancre}" ${actif === ancre ? 'aria-current="page"' : ''}>${texte}</a>`;
   const messages = lien('messages', 'Messages <span class="compteur" data-non-lus hidden></span>');
+  const soumissions = etat.utilisateur.soumissions
+    ? `<a href="#soumissions" ${actif === 'soumissions' ? 'aria-current="page"' : ''}>Soumissions</a>` : '';
   setTimeout(() => {
     // Sur téléphone, le menu défile : on garde l'onglet ouvert visible.
     document.querySelector('.onglets [aria-current="page"]')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
     majNonLus();
   });
   if (etat.utilisateur.role !== 'bureau') {
-    return `<nav class="onglets">${lien('punch', 'Punch')}${lien('factures', 'Mes factures')}${lien('projets', 'Projets')}${peutPlanifier() ? lien('calendrier', 'Calendrier') : ''}${messages}</nav>`;
+    return `<nav class="onglets">${lien('punch', 'Punch')}${lien('factures', 'Mes factures')}${lien('projets', 'Projets')}${peutPlanifier() ? lien('calendrier', 'Calendrier') : ''}${soumissions}${messages}</nav>`;
   }
   // Bureau : 4 grands onglets ; Factures et Employés ont leurs sous-onglets juste en dessous.
   const groupe = Object.keys(SOUS_ONGLETS).find((g) => SOUS_ONGLETS[g].some(([ancre]) => ancre === actif));
   const principal = (g, ancre, texte) => `<a href="#${ancre}" ${groupe === g || actif === g ? 'aria-current="page"' : ''}>${texte}</a>`;
   return `<nav class="onglets">
-    ${principal('factures', 'bureau/en_attente', 'Factures')}${messages}${principal('employes', 'heures', 'Employés')}${lien('projets', 'Projets')}${lien('calendrier', 'Calendrier')}
+    ${principal('factures', 'bureau/en_attente', 'Factures')}${messages}${principal('employes', 'heures', 'Employés')}${lien('projets', 'Projets')}${lien('calendrier', 'Calendrier')}${soumissions}
   </nav>${groupe ? `<nav class="sous-onglets">${SOUS_ONGLETS[groupe].map(([ancre, texte]) => lien(ancre, texte)).join('')}</nav>` : ''}`;
 }
 
@@ -1853,9 +1860,11 @@ async function vueEmployes() {
     <div class="carte"><ul class="liste">${utilisateurs.map((u) => `
       <li class="employe">
         <div class="infos"><strong>${h(u.nom)}</strong>
-          <div class="doux">${h(u.identifiant)} · ${u.role === 'bureau' ? 'Bureau' : u.chef_projet ? 'Chargé de projet' : 'Employé'}${u.actif ? '' : ' · désactivé'}</div></div>
+          <div class="doux">${h(u.identifiant)} · ${u.role === 'bureau' ? 'Bureau' : u.chef_projet ? 'Chargé de projet' : 'Employé'}${u.soumissions ? ' · Soumissions' : ''}${u.actif ? '' : ' · désactivé'}</div></div>
         ${u.role === 'bureau' ? '' : `<button class="secondaire" data-chef="${u.id}" data-valeur="${u.chef_projet ? 0 : 1}" type="button">
           ${u.chef_projet ? 'Retirer chargé de projet' : 'Nommer chargé de projet'}</button>`}
+        <button class="secondaire" data-soumissions="${u.id}" data-valeur="${u.soumissions ? 0 : 1}" type="button">
+          ${u.soumissions ? 'Retirer l\'accès aux soumissions' : 'Donner accès aux soumissions'}</button>
         <button class="secondaire" data-mdp="${u.id}" type="button">Nouveau NIP</button>
         ${u.id === etat.utilisateur.id ? '' : `<button class="${u.actif ? 'danger' : 'secondaire'}" data-actif="${u.id}" data-valeur="${u.actif ? 0 : 1}" type="button">${u.actif ? 'Désactiver' : 'Réactiver'}</button>`}
         ${u.id === etat.utilisateur.id ? '' : `<button class="danger" data-supprimer="${u.id}" data-nom="${h(u.nom)}" type="button">Supprimer</button>`}
@@ -1892,6 +1901,12 @@ async function vueEmployes() {
       vueEmployes();
     });
   }));
+  vue.querySelectorAll('[data-soumissions]').forEach((b) => b.addEventListener('click', () => occuper(b, async () => {
+    const donner = b.dataset.valeur === '1';
+    await api(`/api/bureau/utilisateurs/${b.dataset.soumissions}`, { method: 'PATCH', json: { soumissions: donner } });
+    if (Number(b.dataset.soumissions) === etat.utilisateur.id) etat.utilisateur.soumissions = donner ? 1 : 0;
+    vueEmployes();
+  })));
   vue.querySelectorAll('[data-chef]').forEach((b) => b.addEventListener('click', () => occuper(b, async () => {
     await api(`/api/bureau/utilisateurs/${b.dataset.chef}`, { method: 'PATCH', json: { chef_projet: b.dataset.valeur === '1' } });
     vueEmployes();
@@ -2073,6 +2088,261 @@ async function vueCalendrier(mois) {
     if (modifier) formulaire(planifications.find((pl) => pl.id === Number(modifier.dataset.modifier)));
   };
   afficher();
+}
+
+// ---------- Soumissions ----------
+// Les personnes à qui le bureau a donné l'accès préparent des soumissions et les envoient au client en PDF.
+const STATUTS_SOUMISSION = { brouillon: 'Brouillon', envoyee: 'Envoyée', acceptee: 'Acceptée', refusee: 'Refusée' };
+const COULEUR_STATUT_SOUMISSION = { brouillon: 's-brouillon', envoyee: 's-en_attente', acceptee: 's-approuvee', refusee: 's-refusee' };
+const TAUX_TPS = 0.05;
+const TAUX_TVQ = 0.09975;
+const cents = (n) => Math.round(Number((n * 100).toPrecision(12))) / 100;
+function totauxSoumission(lignes) {
+  const sousTotal = cents(lignes.reduce((t, l) => t + cents((Number(l.quantite) || 0) * (Number(l.prix) || 0)), 0));
+  const tps = cents(sousTotal * TAUX_TPS);
+  const tvq = cents(sousTotal * TAUX_TVQ);
+  return { sousTotal, tps, tvq, total: cents(sousTotal + tps + tvq) };
+}
+const pastilleSoumission = (statut) => `<span class="pastille ${COULEUR_STATUT_SOUMISSION[statut]}">${STATUTS_SOUMISSION[statut]}</span>`;
+
+async function vueSoumissions() {
+  vue.innerHTML = `${ongletsBureau('soumissions')}<div id="contenu"><p class="vide">Chargement…</p></div>`;
+  const { soumissions } = await api('/api/soumissions');
+  const contenu = document.getElementById('contenu');
+  if (!contenu) return;
+  contenu.innerHTML = `
+    <a class="bouton pleine" href="#soumission/nouvelle">+ Nouvelle soumission</a>
+    <div class="carte" style="margin-top:12px"><ul class="liste">${soumissions.length ? soumissions.map((so) => `
+      <li>
+        <div class="infos"><a href="#soumission/${so.id}"><strong>${h(so.numero)} · ${h(so.client_nom || 'Client')}</strong></a>
+          <div class="doux">${h(so.titre || so.projet_nom || '')}${so.titre || so.projet_nom ? ' · ' : ''}${dateLocale(so.date_soumission).toLocaleDateString('fr-CA', { day: 'numeric', month: 'short', year: 'numeric' })} · ${h(so.auteur || '')}</div></div>
+        <div class="soum-droite"><span class="montant">${fmt(so.total)}</span>${pastilleSoumission(so.statut)}</div>
+      </li>`).join('') : '<li class="vide">Aucune soumission pour l\'instant.</li>'}</ul></div>
+    <p><a href="#soumissions/entreprise">Coordonnées de l'entreprise sur les soumissions (adresse, RBQ, numéros de taxes)</a></p>`;
+}
+
+async function vueEntreprise() {
+  vue.innerHTML = `${ongletsBureau('soumissions')}<div id="contenu"><p class="vide">Chargement…</p></div>`;
+  const { entreprise: e } = await api('/api/soumissions/entreprise');
+  const contenu = document.getElementById('contenu');
+  if (!contenu) return;
+  const champ = (cle, libelle, extra = '') => `<div><label for="e-${cle}">${libelle}</label><input id="e-${cle}" name="${cle}" value="${h(e[cle])}" ${extra}></div>`;
+  contenu.innerHTML = `
+    <p><a href="#soumissions">← Soumissions</a></p>
+    <h1>Coordonnées de l'entreprise</h1>
+    <p class="doux">Elles s'impriment en haut de chaque soumission.</p>
+    <form class="carte" id="f-entreprise">
+      <div class="grille2">
+        ${champ('nom', 'Nom', 'required')}${champ('telephone', 'Téléphone', 'type="tel"')}
+        ${champ('adresse', 'Adresse')}${champ('courriel', 'Courriel', 'type="email"')}
+        ${champ('site', 'Site Web')}${champ('rbq', 'Licence RBQ')}
+        ${champ('tps', 'Numéro de TPS')}${champ('tvq', 'Numéro de TVQ')}
+      </div>
+      <label for="e-conditions">Conditions ajoutées au bas de chaque soumission</label>
+      <textarea id="e-conditions" name="conditions" rows="4">${h(e.conditions)}</textarea>
+      <div class="actions"><button>Enregistrer</button></div>
+    </form>`;
+  const form = document.getElementById('f-entreprise');
+  form.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    occuper(form.querySelector('button'), async () => {
+      await api('/api/soumissions/entreprise', { method: 'PUT', json: lireFormulaire(form) });
+      avis('Coordonnées enregistrées.');
+      location.hash = 'soumissions';
+    });
+  });
+}
+
+async function vueSoumission(idTexte) {
+  const nouvelle = idTexte === 'nouvelle';
+  vue.innerHTML = `${ongletsBureau('soumissions')}<div id="contenu"><p class="vide">Chargement…</p></div>`;
+  const [donnees, { projets }] = await Promise.all([
+    nouvelle ? Promise.resolve({ soumission: null }) : api(`/api/soumissions/${Number(idTexte)}`), api('/api/projets'),
+  ]);
+  const contenu = document.getElementById('contenu');
+  if (!contenu) return;
+  const so = donnees.soumission || {
+    statut: 'brouillon', date_soumission: jourIso(new Date()), validite_jours: 30, lignes: [{ description: '', quantite: 1, unite: '', prix: '' }],
+  };
+  if (so.projet_id && !projets.some((p) => p.id === so.projet_id)) projets.push({ id: so.projet_id, nom: so.projet_nom });
+  let lignes = so.lignes.map((l) => ({ ...l }));
+  let modifiee = false;
+
+  const ligneHtml = (l, i) => `
+    <div class="soum-ligne" data-i="${i}">
+      <textarea data-champ="description" rows="2" placeholder="Description des travaux ou du matériel">${h(l.description)}</textarea>
+      <div class="soum-chiffres">
+        <div><label>Qté</label><input data-champ="quantite" type="number" inputmode="decimal" step="any" value="${h(l.quantite)}"></div>
+        <div><label>Unité</label><input data-champ="unite" list="unites" maxlength="20" placeholder="ex. pi²" value="${h(l.unite)}"></div>
+        <div><label>Prix unitaire</label><input data-champ="prix" type="number" inputmode="decimal" step="0.01" value="${h(l.prix)}"></div>
+        <div class="soum-montant"><label>Montant</label><span data-montant>${fmt(cents((Number(l.quantite) || 0) * (Number(l.prix) || 0)))}</span></div>
+      </div>
+      <button class="lien soum-retirer" type="button" data-retirer="${i}">Retirer la ligne</button>
+    </div>`;
+
+  contenu.innerHTML = `
+    <p><a href="#soumissions">← Soumissions</a></p>
+    <div class="titre-album"><h1>${nouvelle ? 'Nouvelle soumission' : h(so.numero)}</h1>${nouvelle ? '' : pastilleSoumission(so.statut)}</div>
+    <form id="f-soumission">
+      <div class="carte">
+        <h3>Client</h3>
+        <div class="grille2">
+          <div><label for="s-nom">Nom du client</label><input id="s-nom" name="client_nom" required value="${h(so.client_nom || '')}"></div>
+          <div><label for="s-tel">Téléphone</label><input id="s-tel" name="client_telephone" type="tel" value="${h(so.client_telephone || '')}"></div>
+          <div><label for="s-courriel">Courriel</label><input id="s-courriel" name="client_courriel" type="email" value="${h(so.client_courriel || '')}"></div>
+          <div><label for="s-adresse">Adresse du client</label><input id="s-adresse" name="client_adresse" value="${h(so.client_adresse || '')}"></div>
+        </div>
+      </div>
+      <div class="carte">
+        <h3>Travaux</h3>
+        <div class="grille2">
+          <div><label for="s-projet">Projet <span class="doux">(facultatif)</span></label>
+            <select id="s-projet" name="projet_id"><option value="">— Aucun —</option>
+              ${projets.map((p) => `<option value="${p.id}" ${p.id === so.projet_id ? 'selected' : ''}>${h(p.nom)}</option>`).join('')}</select></div>
+          <div><label for="s-lieu">Adresse des travaux</label><input id="s-lieu" name="adresse_travaux" value="${h(so.adresse_travaux || '')}"></div>
+        </div>
+        <label for="s-titre">Titre</label>
+        <input id="s-titre" name="titre" maxlength="200" placeholder="Ex. : Remise en état du sous-sol après dégât d'eau" value="${h(so.titre || '')}">
+        <div class="grille2">
+          <div><label for="s-date">Date</label><input id="s-date" name="date_soumission" type="date" required value="${so.date_soumission}"></div>
+          <div><label for="s-validite">Valide (jours)</label><input id="s-validite" name="validite_jours" type="number" min="1" max="365" required value="${so.validite_jours}"></div>
+        </div>
+      </div>
+      <div class="carte">
+        <h3>Lignes</h3>
+        <datalist id="unites">${['forfait', 'h', 'jour', 'pi²', 'pi lin.', 'm²', 'unité', 'feuille', 'sac', 'gallon'].map((u) => `<option value="${u}">`).join('')}</datalist>
+        <div id="soum-lignes">${lignes.map(ligneHtml).join('')}</div>
+        <button class="secondaire pleine" type="button" id="btn-ligne">+ Ajouter une ligne</button>
+        <dl class="soum-totaux" id="soum-totaux"></dl>
+      </div>
+      <div class="carte">
+        <label for="s-notes" style="margin-top:0">Notes au client <span class="doux">(facultatif, imprimées avant les conditions)</span></label>
+        <textarea id="s-notes" name="notes" rows="3" placeholder="Ex. : Exclusions, délais, mode de paiement…">${h(so.notes || '')}</textarea>
+        ${nouvelle ? '' : `<label for="s-statut">Statut</label>
+        <select id="s-statut" name="statut">${Object.entries(STATUTS_SOUMISSION).map(([k, v]) => `<option value="${k}" ${k === so.statut ? 'selected' : ''}>${v}</option>`).join('')}</select>`}
+      </div>
+      <div class="actions soum-actions">
+        <button type="submit">${nouvelle ? 'Créer la soumission' : 'Enregistrer'}</button>
+        ${nouvelle ? '' : `<button type="button" id="btn-envoyer">📧 Envoyer le PDF au client…</button>
+          <a class="bouton secondaire" href="/api/soumissions/${so.id}/pdf" target="_blank" rel="noopener">Voir le PDF</a>
+          <a class="bouton secondaire" href="/api/soumissions/${so.id}/pdf?telecharger=1">Télécharger le PDF</a>
+          <button class="danger" type="button" id="btn-supprimer-soumission">Supprimer</button>`}
+      </div>
+    </form>`;
+
+  const form = document.getElementById('f-soumission');
+  const zoneLignes = document.getElementById('soum-lignes');
+  function majTotaux() {
+    const t = totauxSoumission(lignes);
+    document.getElementById('soum-totaux').innerHTML = `
+      <dt>Sous-total</dt><dd>${fmt(t.sousTotal)}</dd><dt>TPS (5 %)</dt><dd>${fmt(t.tps)}</dd>
+      <dt>TVQ (9,975 %)</dt><dd>${fmt(t.tvq)}</dd><dt class="total">Total</dt><dd class="total">${fmt(t.total)}</dd>`;
+  }
+  const redessinerLignes = () => { zoneLignes.innerHTML = lignes.map(ligneHtml).join(''); majTotaux(); };
+  zoneLignes.addEventListener('input', (e) => {
+    const champ = e.target.dataset.champ;
+    const bloc = e.target.closest('[data-i]');
+    if (!champ || !bloc) return;
+    const l = lignes[Number(bloc.dataset.i)];
+    l[champ] = e.target.value;
+    bloc.querySelector('[data-montant]').textContent = fmt(cents((Number(l.quantite) || 0) * (Number(l.prix) || 0)));
+    majTotaux();
+  });
+  zoneLignes.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-retirer]');
+    if (!b) return;
+    lignes.splice(Number(b.dataset.retirer), 1);
+    if (!lignes.length) lignes.push({ description: '', quantite: 1, unite: '', prix: '' });
+    modifiee = true;
+    redessinerLignes();
+  });
+  document.getElementById('btn-ligne').onclick = () => {
+    lignes.push({ description: '', quantite: 1, unite: '', prix: '' });
+    redessinerLignes();
+    zoneLignes.lastElementChild.querySelector('textarea').focus();
+  };
+  form.addEventListener('input', () => { modifiee = true; });
+  // Choisir un projet remplit l'adresse des travaux si elle est vide.
+  form.querySelector('#s-projet').addEventListener('change', (e) => {
+    const p = projets.find((x) => x.id === Number(e.target.value));
+    const lieu = form.querySelector('#s-lieu');
+    if (p?.adresse && !lieu.value) lieu.value = p.adresse;
+  });
+  majTotaux();
+
+  const corps = () => {
+    const d = lireFormulaire(form);
+    return { ...d, projet_id: Number(d.projet_id) || null, validite_jours: Number(d.validite_jours),
+      lignes: lignes.map((l) => ({ ...l, quantite: l.quantite === '' ? 1 : Number(l.quantite), prix: Number(l.prix) || 0 })) };
+  };
+  const enregistrer = async () => {
+    const r = await api(nouvelle ? '/api/soumissions' : `/api/soumissions/${so.id}`, { method: nouvelle ? 'POST' : 'PATCH', json: corps() });
+    modifiee = false;
+    return r.soumission;
+  };
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    occuper(form.querySelector('button[type="submit"]'), async () => {
+      const r = await enregistrer();
+      avis(nouvelle ? `Soumission ${r.numero} créée.` : 'Soumission enregistrée.');
+      if (nouvelle) location.hash = `soumission/${r.id}`;
+      else vueSoumission(String(r.id));
+    });
+  });
+
+  // Envoyer : enregistre et prépare le PDF, puis un 2e bouton ouvre le partage du téléphone (courriel, texto…) :
+  // le partage doit partir d'un toucher, pas de la fin d'un téléchargement. Sans partage de fichiers (ordinateur),
+  // le PDF se télécharge et un nouveau courriel s'ouvre pour le joindre.
+  const btnEnvoyer = document.getElementById('btn-envoyer');
+  btnEnvoyer?.addEventListener('click', () => occuper(btnEnvoyer, async () => {
+    if (!form.reportValidity()) return;
+    const actuelle = modifiee ? await enregistrer() : so;
+    btnEnvoyer.textContent = 'Préparation du PDF…';
+    const rep = await fetch(`/api/soumissions/${so.id}/pdf`, { credentials: 'same-origin' });
+    if (!rep.ok) throw new Error('Le PDF n\'a pas pu être créé.');
+    const nom = `Soumission ${actuelle.numero}${actuelle.client_nom ? ` - ${actuelle.client_nom}` : ''}.pdf`.replace(/[\\/:*?"<>|]/g, '-');
+    const fichier = new File([await rep.blob()], nom, { type: 'application/pdf' });
+    const sujet = `Soumission ${actuelle.numero}${actuelle.titre ? ` - ${actuelle.titre}` : ''}`;
+    const message = `Bonjour ${actuelle.client_nom || ''},\n\nVous trouverez ci-joint notre soumission ${actuelle.numero}. N'hésitez pas à nous contacter pour toute question.\n\nMerci,\n${etat.utilisateur.nom}`;
+    const partage = navigator.canShare?.({ files: [fichier] });
+    let zone = document.getElementById('soum-envoi');
+    if (!zone) {
+      zone = document.createElement('div');
+      zone.id = 'soum-envoi';
+      form.querySelector('.soum-actions').after(zone);
+    }
+    zone.innerHTML = `<div class="carte pdf-pret"><strong>📄 ${h(nom)}</strong>
+      <span class="doux">${actuelle.client_courriel ? `Pour ${h(actuelle.client_courriel)}` : 'Aucun courriel de client inscrit'}</span>
+      <div class="actions"><button type="button" id="btn-partager-soumission">${partage ? 'Envoyer par courriel…' : 'Ouvrir un courriel avec le PDF'}</button></div></div>`;
+    zone.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    const marquerEnvoyee = async () => {
+      if (actuelle.statut !== 'brouillon') return;
+      await api(`/api/soumissions/${so.id}`, { method: 'PATCH', json: { statut: 'envoyee' } });
+      avis('Soumission marquée « Envoyée ».');
+      vueSoumission(String(so.id));
+    };
+    document.getElementById('btn-partager-soumission').onclick = (ev) => occuper(ev.currentTarget, async () => {
+      if (partage) {
+        try { await navigator.share({ files: [fichier], title: sujet, text: message }); } catch (err) {
+          if (err.name === 'AbortError') return;
+          throw err;
+        }
+      } else {
+        enregistrerFichier(fichier, nom);
+        location.href = `mailto:${encodeURIComponent(actuelle.client_courriel || '')}?subject=${encodeURIComponent(sujet)}&body=${encodeURIComponent(`${message}\n\n(Joindre le PDF téléchargé : ${nom})`)}`;
+      }
+      await marquerEnvoyee();
+    });
+  }));
+
+  document.getElementById('btn-supprimer-soumission')?.addEventListener('click', (e) => {
+    if (!confirm(`Supprimer la soumission ${so.numero} ?`)) return;
+    occuper(e.currentTarget, async () => {
+      await api(`/api/soumissions/${so.id}`, { method: 'DELETE' });
+      avis('Soumission supprimée.');
+      location.hash = 'soumissions';
+    });
+  });
 }
 
 demarrer().catch((e) => { vue.innerHTML = `<div class="bandeau erreur">${h(e.message)}</div>`; });
