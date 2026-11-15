@@ -112,11 +112,13 @@ function vueConnexion() {
     <form class="carte etroit" id="f-connexion">
       <h1>Connexion</h1>
       <label for="identifiant">Identifiant</label>
-      <input id="identifiant" name="identifiant" autocomplete="username" autocapitalize="none" required>
+      <input id="identifiant" name="identifiant" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required>
       <label for="mdp">Mot de passe ou NIP</label>
       <input id="mdp" name="motDePasse" type="password" autocomplete="current-password" required>
       <div class="actions"><button class="pleine">Se connecter</button></div>
+      ${etat.codeInstallationRequis ? '<p class="centre"><a href="#" id="lien-oubli">Mot de passe du bureau oublié ?</a></p>' : ''}
     </form>`;
+  document.getElementById('lien-oubli')?.addEventListener('click', (e) => { e.preventDefault(); vueMotDePasseOublie(); });
   const form = document.getElementById('f-connexion');
   form.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -127,6 +129,52 @@ function vueConnexion() {
       route();
     });
   });
+}
+
+// Compte du bureau seulement : le code d'installation (choisi à la mise en ligne) permet un nouveau mot de passe.
+function vueMotDePasseOublie() {
+  vue.innerHTML = `
+    <form class="carte etroit" id="f-oubli">
+      <h1>Mot de passe oublié</h1>
+      <p class="doux">Pour un compte du bureau. Il faut le code d'installation choisi lors de la mise en ligne de l'app.
+        Un employé, lui, demande un nouveau NIP au bureau.</p>
+      <label for="o-identifiant">Identifiant</label>
+      <input id="o-identifiant" name="identifiant" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required>
+      <label for="o-code">Code d'installation</label>
+      <input id="o-code" name="code" type="password" autocomplete="off" required>
+      ${champsNouveauMotDePasse('o', 10)}
+      <div class="actions"><button class="pleine">Changer le mot de passe et me connecter</button></div>
+      <p class="centre"><a href="#" id="lien-retour">← Retour à la connexion</a></p>
+    </form>`;
+  document.getElementById('lien-retour').addEventListener('click', (e) => { e.preventDefault(); vueConnexion(); });
+  const form = document.getElementById('f-oubli');
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!memesMotsDePasse(form)) return;
+    occuper(form.querySelector('button'), async () => {
+      const { identifiant, code, motDePasse } = lireFormulaire(form);
+      const { utilisateur } = await api('/api/mot-de-passe-oublie', { method: 'POST', json: { identifiant, code, motDePasse } });
+      etat.utilisateur = utilisateur;
+      avis('Mot de passe changé. Tu es connecté.');
+      location.hash = '';
+      route();
+    });
+  });
+}
+
+// Deux champs masqués (jamais de majuscule ni de correction automatique) pour choisir un mot de passe.
+function champsNouveauMotDePasse(prefixe, minimum) {
+  const attributs = `type="password" autocomplete="new-password" autocapitalize="none" autocorrect="off" spellcheck="false" minlength="${minimum}" required`;
+  return `<label for="${prefixe}-mdp">Nouveau mot de passe${minimum > 4 ? ` (${minimum} caractères minimum)` : ' ou NIP (4 caractères minimum)'}</label>
+    <input id="${prefixe}-mdp" name="motDePasse" ${attributs}>
+    <label for="${prefixe}-mdp2">Retape-le pour confirmer</label>
+    <input id="${prefixe}-mdp2" name="confirmation" ${attributs}>`;
+}
+function memesMotsDePasse(form) {
+  const { motDePasse, confirmation } = lireFormulaire(form);
+  if (motDePasse === confirmation) return true;
+  avis('Les deux mots de passe ne sont pas pareils.');
+  return false;
 }
 
 function vuePremierCompte() {
@@ -1865,7 +1913,7 @@ async function vueEmployes() {
           ${u.chef_projet ? 'Retirer chargé de projet' : 'Nommer chargé de projet'}</button>`}
         <button class="secondaire" data-soumissions="${u.id}" data-valeur="${u.soumissions ? 0 : 1}" type="button">
           ${u.soumissions ? 'Retirer l\'accès aux soumissions' : 'Donner accès aux soumissions'}</button>
-        <button class="secondaire" data-mdp="${u.id}" type="button">Nouveau NIP</button>
+        <button class="secondaire" data-mdp="${u.id}" type="button">Changer le mot de passe</button>
         ${u.id === etat.utilisateur.id ? '' : `<button class="${u.actif ? 'danger' : 'secondaire'}" data-actif="${u.id}" data-valeur="${u.actif ? 0 : 1}" type="button">${u.actif ? 'Désactiver' : 'Réactiver'}</button>`}
         ${u.id === etat.utilisateur.id ? '' : `<button class="danger" data-supprimer="${u.id}" data-nom="${h(u.nom)}" type="button">Supprimer</button>`}
       </li>`).join('')}</ul></div>
@@ -1911,12 +1959,27 @@ async function vueEmployes() {
     await api(`/api/bureau/utilisateurs/${b.dataset.chef}`, { method: 'PATCH', json: { chef_projet: b.dataset.valeur === '1' } });
     vueEmployes();
   })));
+  // Un vrai champ masqué plutôt qu'une boîte prompt() : sur iPhone, la boîte ajoutait une majuscule ou corrigeait
+  // le mot de passe, qui ne fonctionnait plus ensuite à la connexion.
   vue.querySelectorAll('[data-mdp]').forEach((b) => b.addEventListener('click', () => {
-    const motDePasse = prompt('Nouveau NIP ou mot de passe :');
-    if (!motDePasse) return;
-    occuper(b, async () => {
-      await api(`/api/bureau/utilisateurs/${b.dataset.mdp}`, { method: 'PATCH', json: { motDePasse } });
-      avis('Mot de passe changé.');
+    const ligne = b.closest('li');
+    if (ligne.querySelector('.f-mdp')) return;
+    const u = utilisateurs.find((x) => x.id === Number(b.dataset.mdp));
+    const form = document.createElement('form');
+    form.className = 'f-mdp';
+    form.innerHTML = `${champsNouveauMotDePasse(`m${u.id}`, u.role === 'bureau' ? 10 : 4)}
+      <div class="actions"><button>Enregistrer</button><button class="secondaire" type="button" data-annuler>Annuler</button></div>`;
+    ligne.append(form);
+    form.querySelector('input').focus();
+    form.querySelector('[data-annuler]').onclick = () => form.remove();
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (!memesMotsDePasse(form)) return;
+      occuper(form.querySelector('button'), async () => {
+        await api(`/api/bureau/utilisateurs/${u.id}`, { method: 'PATCH', json: { motDePasse: lireFormulaire(form).motDePasse } });
+        avis(u.id === etat.utilisateur.id ? 'Ton mot de passe est changé.' : `Mot de passe de ${u.nom} changé.`);
+        form.remove();
+      });
     });
   }));
 }

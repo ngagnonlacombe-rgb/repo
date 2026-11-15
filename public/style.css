@@ -238,3 +238,5 @@ body.sans-defilement { overflow: hidden; }
 .soum-totaux .total { font-weight: 700; font-size: 18px; color: var(--texte); border-top: 2px solid var(--accent); padding-top: 4px; }
 #f-soumission h3 { margin: 0 0 4px; }
 @media (max-width: 480px) { .soum-chiffres { grid-template-columns: 1fr 1fr; } }
+.liste li.employe .f-mdp { flex-basis: 100%; }
+.centre { text-align: center; }
