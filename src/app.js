@@ -42,6 +42,9 @@ function categorieLue(f) {
 export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false, dossierPublic, codeInstallation, notifieur = creerNotifieur(db) }) {
   const app = express();
   const limiteur = limiteurConnexion();
+  // L'identifiant se tape sans tenir compte des majuscules (le téléphone met souvent une majuscule au début).
+  const compteActif = (identifiant) => db.prepare(`SELECT * FROM utilisateurs WHERE identifiant = ? COLLATE NOCASE
+    AND actif = 1 AND supprime = 0 ORDER BY identifiant = ? DESC LIMIT 1`).get(String(identifiant).trim(), String(identifiant).trim());
   const enTraitement = new Set();
   fs.mkdirSync(dossierFichiers, { recursive: true });
 
@@ -93,12 +96,38 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
     if (limiteur.bloque(identifiant)) {
       return res.status(429).json({ erreur: 'Trop d\'essais. Réessaie dans 15 minutes.' });
     }
-    const u = db.prepare('SELECT * FROM utilisateurs WHERE identifiant = ? AND actif = 1').get(identifiant.trim());
+    const u = compteActif(identifiant);
     if (!u || !verifier(String(motDePasse), u.hash)) {
       limiteur.echec(identifiant);
       return res.status(401).json({ erreur: 'Identifiant ou mot de passe incorrect.' });
     }
     limiteur.reussite(identifiant);
+    poserCookie(res, creerSession(db, u.id), production);
+    res.json({ utilisateur: { id: u.id, nom: u.nom, identifiant: u.identifiant, role: u.role, chef_projet: u.chef_projet, soumissions: u.soumissions } });
+  });
+
+  // Mot de passe oublié (comptes du bureau seulement) : le code d'installation, connu du propriétaire, permet de
+  // choisir un nouveau mot de passe. Les employés, eux, demandent un nouveau NIP au bureau.
+  app.post('/api/mot-de-passe-oublie', (req, res) => {
+    const { identifiant = '', code = '', motDePasse = '' } = req.body || {};
+    if (!codeInstallation) return res.status(404).json({ erreur: 'Demande à une autre personne du bureau de changer ton mot de passe.' });
+    if (limiteur.bloque('#oubli') || limiteur.bloque(String(identifiant))) {
+      return res.status(429).json({ erreur: 'Trop d\'essais. Réessaie dans 15 minutes.' });
+    }
+    if (!egalSecret(String(code), codeInstallation)) {
+      limiteur.echec('#oubli');
+      return res.status(401).json({ erreur: 'Code d\'installation incorrect.' });
+    }
+    const u = compteActif(identifiant);
+    if (!u || u.role !== 'bureau') {
+      return res.status(404).json({ erreur: 'Aucun compte du bureau avec cet identifiant. Un employé demande un nouveau NIP au bureau.' });
+    }
+    const erreur = validerMotDePasse(motDePasse, u.role);
+    if (erreur) return res.status(400).json({ erreur });
+    db.prepare('UPDATE utilisateurs SET hash = ? WHERE id = ?').run(hacher(String(motDePasse)), u.id);
+    db.prepare('DELETE FROM sessions WHERE utilisateur_id = ?').run(u.id);
+    limiteur.reussite('#oubli');
+    limiteur.reussite(String(identifiant));
     poserCookie(res, creerSession(db, u.id), production);
     res.json({ utilisateur: { id: u.id, nom: u.nom, identifiant: u.identifiant, role: u.role, chef_projet: u.chef_projet, soumissions: u.soumissions } });
   });
@@ -299,7 +328,7 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
     const { nom, identifiant, motDePasse, role = 'employe' } = req.body || {};
     const erreur = validerCompte({ nom, identifiant, motDePasse, role });
     if (erreur) return res.status(400).json({ erreur });
-    if (db.prepare('SELECT 1 FROM utilisateurs WHERE identifiant = ?').get(identifiant.trim())) {
+    if (db.prepare('SELECT 1 FROM utilisateurs WHERE identifiant = ? COLLATE NOCASE').get(identifiant.trim())) {
       return res.status(409).json({ erreur: 'Cet identifiant est déjà utilisé.' });
     }
     db.prepare('INSERT INTO utilisateurs (nom, identifiant, hash, role) VALUES (?, ?, ?, ?)')
@@ -317,8 +346,9 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
     if (motDePasse !== undefined) {
       const erreur = validerMotDePasse(motDePasse, u.role);
       if (erreur) return res.status(400).json({ erreur });
-      db.prepare('UPDATE utilisateurs SET hash = ? WHERE id = ?').run(hacher(motDePasse), u.id);
-      db.prepare('DELETE FROM sessions WHERE utilisateur_id = ?').run(u.id);
+      db.prepare('UPDATE utilisateurs SET hash = ? WHERE id = ?').run(hacher(String(motDePasse)), u.id);
+      // Les autres appareils sont déconnectés ; si on change son propre mot de passe, on reste connecté ici.
+      db.prepare('DELETE FROM sessions WHERE utilisateur_id = ? AND jeton IS NOT ?').run(u.id, u.id === req.utilisateur.id ? req.jeton : null);
     }
     if (typeof actif === 'boolean') {
       db.prepare('UPDATE utilisateurs SET actif = ? WHERE id = ?').run(actif ? 1 : 0, u.id);
