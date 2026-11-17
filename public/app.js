@@ -383,7 +383,7 @@ function bandeauQuickBooks() {
       <a class="bouton" href="/api/qbo/connecter" style="margin-left:8px">Connecter QuickBooks</a></div>`;
   }
   return q.mode === 'sandbox'
-    ? '<div class="bandeau">Connecté à une compagnie QuickBooks de test.</div>'
+    ? '<div class="bandeau">Connecté à une compagnie QuickBooks de test. <a href="/api/qbo/connecter">Reconnecter</a></div>'
     : '';
 }
 
@@ -428,7 +428,10 @@ async function vueBureau(statut) {
   try {
     listesQbo = await api('/api/bureau/listes');
   } catch (e) {
-    contenu.innerHTML = `<div class="bandeau erreur">${h(e.message)}</div>`;
+    // Connexion QuickBooks expirée : l'état à jour affiche le bouton pour la refaire.
+    etat = await api('/api/etat').catch(() => etat);
+    contenu.innerHTML = `${etat.quickbooks.connecte ? '' : bandeauQuickBooks()}<div class="bandeau erreur">${h(e.message)}</div>
+      <p class="doux">${factures.length} facture(s) en attente.</p>`;
     return;
   }
   contenu.innerHTML = `<p class="doux">${factures.length} facture(s) en attente, la plus ancienne en premier.</p>`;
