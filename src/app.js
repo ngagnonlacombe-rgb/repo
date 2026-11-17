@@ -12,6 +12,7 @@ import { ErreurQbo } from './quickbooks.js';
 import { brancherProjets } from './projets.js';
 import { brancherMessagerie } from './messagerie.js';
 import { creerNotifieur } from './notifications.js';
+import { creerAlertes } from './alertes.js';
 import { brancherPunch } from './punch.js';
 import { brancherBanques } from './banques.js';
 import { brancherCalendrier } from './calendrier.js';
@@ -39,8 +40,9 @@ function categorieLue(f) {
   } catch { return null; }
 }
 
-export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false, dossierPublic, codeInstallation, notifieur = creerNotifieur(db) }) {
+export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false, dossierPublic, codeInstallation, notifieur = creerNotifieur(db), alertes = creerAlertes({ db, notifieur, dossier: dossierFichiers, qbo }) }) {
   const app = express();
+  app.locals.alertes = alertes;
   const limiteur = limiteurConnexion();
   // L'identifiant se tape sans tenir compte des majuscules (le téléphone met souvent une majuscule au début).
   const compteActif = (identifiant) => db.prepare(`SELECT * FROM utilisateurs WHERE identifiant = ? COLLATE NOCASE
@@ -72,6 +74,8 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
       utilisateur: req.utilisateur || null,
       quickbooks: { mode: qbo.mode, connecte: qbo.connecte() },
       lectureAuto: lecteur.actif,
+      // Le bureau voit un bandeau quand le disque se remplit.
+      ...(req.utilisateur?.role === 'bureau' && alertes.disque()?.niveau ? { disque: alertes.disque() } : {}),
     });
   });
 
@@ -402,10 +406,14 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
   app.use('/api', (_req, res) => res.status(404).json({ erreur: 'Adresse inconnue.' }));
 
   // eslint-disable-next-line no-unused-vars
-  app.use((err, _req, res, _next) => {
-    if (err instanceof ErreurQbo) return res.status(502).json({ erreur: `QuickBooks : ${err.message}` });
+  app.use((err, req, res, _next) => {
+    if (err instanceof ErreurQbo) {
+      if (/expiré|Reconnecte/.test(err.message)) alertes.quickBooksDeconnecte().catch(() => {});
+      return res.status(502).json({ erreur: `QuickBooks : ${err.message}` });
+    }
     if (err instanceof multer.MulterError) return res.status(400).json({ erreur: 'Fichier trop gros (15 Mo max pour une photo ou une facture, 25 Mo pour un document).' });
     console.error(err);
+    alertes.erreur(err, req).catch(() => {});
     res.status(500).json({ erreur: 'Erreur inattendue. Réessaie.' });
   });
 
