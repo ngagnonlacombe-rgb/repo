@@ -387,10 +387,19 @@ function bandeauQuickBooks() {
     : '';
 }
 
+// Disque presque plein : le bureau le voit avant que le punch arrête de fonctionner.
+function bandeauDisque() {
+  const d = etat.disque;
+  if (!d?.niveau) return '';
+  const libre = `${(d.libre / 1024 ** 3).toFixed(1).replace('.', ',')} Go`;
+  return `<div class="bandeau alerte">Le disque de l'app est plein à ${d.pourcent} % (${libre} libres).
+    ${d.niveau === 'urgent' ? 'Le punch et les photos vont bientôt arrêter de fonctionner : il faut l\'agrandir maintenant.' : 'Prévois de l\'agrandir.'}</div>`;
+}
+
 async function vueBureau(statut) {
   if (!STATUTS[statut]) statut = 'en_attente';
   etat = await api('/api/etat');
-  vue.innerHTML = `${ongletsBureau(`bureau/${statut}`)}${bandeauQuickBooks()}<div id="contenu"><p class="vide">Chargement…</p></div>`;
+  vue.innerHTML = `${ongletsBureau(`bureau/${statut}`)}${bandeauDisque()}${bandeauQuickBooks()}<div id="contenu"><p class="vide">Chargement…</p></div>`;
   const contenu = document.getElementById('contenu');
   const { factures } = await api(`/api/bureau/factures?statut=${statut}`);
 

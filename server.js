@@ -36,6 +36,9 @@ const app = creerApp({
   dossierPublic: path.join(ici, 'public'),
 });
 
+// Toutes les 30 minutes : disque presque plein ou QuickBooks déconnecté → notification au bureau.
+app.locals.alertes.demarrer();
+
 const port = Number(process.env.PORT) || 3000;
 app.listen(port, () => {
   console.log(`Vapro GUS : http://localhost:${port}`);
