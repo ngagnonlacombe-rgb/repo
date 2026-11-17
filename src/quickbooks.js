@@ -51,7 +51,11 @@ export function creerQuickBooks(db, config) {
       headers: { Authorization: `Basic ${basic}`, Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams(corps),
     });
-    if (!rep.ok) throw new Error(`QuickBooks a refusé l'autorisation (${rep.status}).`);
+    if (!rep.ok) {
+      const e = new ErreurQbo(`QuickBooks a refusé l'autorisation (${rep.status}).`);
+      e.statut = rep.status;
+      throw e;
+    }
     return rep.json();
   }
 
@@ -59,7 +63,18 @@ export function creerQuickBooks(db, config) {
     const j = lireJetons();
     if (!j) throw new ErreurQbo('QuickBooks n\'est pas connecté.');
     if (Date.now() < j.expireA - 60_000) return j;
-    const neuf = await demanderJetons({ grant_type: 'refresh_token', refresh_token: j.refresh });
+    let neuf;
+    try {
+      neuf = await demanderJetons({ grant_type: 'refresh_token', refresh_token: j.refresh });
+    } catch (e) {
+      // Clé de renouvellement refusée (expirée, ou la nouvelle n'a pas pu être enregistrée) : on oublie la
+      // connexion pour que le bureau voie le bouton « Connecter QuickBooks » au lieu d'une erreur.
+      if (e.statut === 400 || e.statut === 401) {
+        db.prepare("DELETE FROM reglages WHERE cle = 'qbo_jetons'").run();
+        throw new ErreurQbo('La connexion à QuickBooks a expiré. Reconnecte QuickBooks.');
+      }
+      throw e;
+    }
     const maj = { ...j, acces: neuf.access_token, refresh: neuf.refresh_token, expireA: Date.now() + neuf.expires_in * 1000 };
     ecrireJetons(maj);
     return maj;

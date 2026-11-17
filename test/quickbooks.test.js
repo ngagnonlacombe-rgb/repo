@@ -116,3 +116,24 @@ test("seuls les codes de taxe valides pour un achat sont proposés, TPS + TVQ en
   await qbo.terminerConnexion('code', '1');
   assert.deepEqual((await qbo.codesTaxe()).map((t) => t.id), ['7', '5']);
 });
+
+test('clé de renouvellement refusée : la connexion est oubliée et le bureau doit reconnecter', async () => {
+  fauxIntuit();
+  const db = ouvrirBase(':memory:');
+  const qbo = creerQuickBooks(db, config);
+  await qbo.terminerConnexion('code-abc', '4620816365');
+  // Intuit refuse la clé de renouvellement (ex. la nouvelle n'avait pas pu être enregistrée) : invalid_grant.
+  const fetchAvant = globalThis.fetch;
+  globalThis.fetch = async (url, init) => (new URL(url).hostname === 'oauth.platform.intuit.com'
+    ? new Response(JSON.stringify({ error: 'invalid_grant' }), { status: 400, headers: { 'content-type': 'application/json' } })
+    : fetchAvant(url, init));
+  const realDateNow = Date.now;
+  Date.now = () => realDateNow() + 2 * 3600 * 1000;
+  try {
+    await assert.rejects(qbo.fournisseurs(), (e) => e instanceof ErreurQbo && /expiré. Reconnecte QuickBooks/.test(e.message));
+  } finally {
+    Date.now = realDateNow;
+    globalThis.fetch = fetchAvant;
+  }
+  assert.equal(qbo.connecte(), false, 'le bureau voit le bouton « Connecter QuickBooks »');
+});
