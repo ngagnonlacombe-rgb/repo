@@ -1,25 +1,22 @@
-# Temporaire : lecture seule de l'état de l'app sur Fly.io (disque, machines, erreurs récentes). Rien n'est modifié.
-name: Diagnostic Fly (lecture seule)
+# Temporaire : agrandit le disque de l'app à 10 Go (accord de Nicolas le 2026-11-17), puis vérifie l'espace libre.
+name: Diagnostic Fly (disque)
 
 on:
   push:
     branches: [diagnostic-fly]
 
 jobs:
-  diagnostic:
+  disque:
     runs-on: ubuntu-latest
     env:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
     steps:
       - uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Machines et disque
+      - name: Agrandir le disque à 10 Go
+        run: flyctl volumes extend vol_491m5megdwjmz0zr --size 10 --app app-employes-ngl --yes
+      - name: Vérifier
         run: |
-          flyctl status --app app-employes-ngl || true
-          flyctl volumes list --app app-employes-ngl || true
-          flyctl machine list --app app-employes-ngl || true
-      - name: Espace disque dans la machine
-        run: flyctl ssh console --app app-employes-ngl -C "df -h /donnees /" || true
-      - name: Taille des dossiers
-        run: flyctl ssh console --app app-employes-ngl -C "sh -c 'du -sh /donnees/* /donnees/factures/* 2>/dev/null'" || true
-      - name: Dernières lignes du journal
-        run: flyctl logs --app app-employes-ngl --no-tail | tail -n 150 || true
+          sleep 20
+          flyctl volumes list --app app-employes-ngl
+          flyctl ssh console --app app-employes-ngl -C "df -h /donnees" || true
+          flyctl logs --app app-employes-ngl --no-tail | tail -n 25 || true
