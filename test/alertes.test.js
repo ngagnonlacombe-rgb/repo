@@ -97,3 +97,28 @@ test('le bureau voit le disque dans /api/etat quand il se remplit ; un employé 
     }
   } finally { serveur.close(); }
 });
+
+test('lecture automatique en échec : le bureau est averti, la facture est quand même déposée', async () => {
+  const db = ouvrirBase(':memory:');
+  db.prepare('INSERT INTO utilisateurs (nom, identifiant, hash, role) VALUES (?, ?, ?, ?)').run('Bureau', 'bureau', hacher('motdepasse-bureau'), 'bureau');
+  db.prepare('INSERT INTO utilisateurs (nom, identifiant, hash, role) VALUES (?, ?, ?, ?)').run('Emp', 'emp', hacher('motdepasse-emp'), 'employe');
+  const envois = [];
+  const alertes = creerAlertes({ db, dossier: '.', notifieur: { notifier: async (ids, m) => { envois.push({ ids, ...m }); } } });
+  const lecteur = { actif: true, lire: async () => { const e = new Error('Your credit balance is too low'); e.status = 400; throw e; } };
+  const app = creerApp({ db, alertes, qbo: creerQuickBooksDemo(), lecteur, dossierFichiers: `/tmp/alertes-lecture-${process.pid}` });
+  const serveur = await new Promise((ok) => { const s = app.listen(0, () => ok(s)); });
+  const base = `http://127.0.0.1:${serveur.address().port}`;
+  try {
+    const c = await fetch(`${base}/api/connexion`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identifiant: 'emp', motDePasse: 'motdepasse-emp' }) });
+    const cookie = c.headers.get('set-cookie').split(';')[0];
+    const form = new FormData();
+    form.append('fichier', new Blob([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64')], { type: 'image/png' }), 'f.png');
+    const r = await fetch(`${base}/api/factures`, { method: 'POST', headers: { cookie }, body: form });
+    assert.equal(r.status, 201);
+    assert.equal((await r.json()).luAutomatiquement, false);
+    await new Promise((ok) => setTimeout(ok, 20));
+    assert.equal(envois.length, 1);
+    assert.deepEqual(envois[0].ids, [1]);
+    assert.match(envois[0].corps, /lecture automatique.*erreur 400.*credit balance/);
+  } finally { serveur.close(); }
+});

@@ -153,6 +153,9 @@ export function creerApp({ db, qbo, lecteur, dossierFichiers, production = false
       lu = await lecteur.lire(req.file.buffer, req.file.mimetype);
     } catch (e) {
       console.error('Lecture automatique impossible :', e.message);
+      // Le bureau est averti : sans ça, les employés remplissent les cases à la main sans que personne le sache.
+      alertes.signaler('lecture', `La lecture automatique des factures ne fonctionne plus${e.status ? ` (erreur ${e.status})` : ''} : `
+        + `${String(e.message).slice(0, 160)}. Vérifie le crédit du compte Anthropic (console.anthropic.com, Billing).`, 6 * 3600 * 1000).catch(() => {});
     }
 
     const { lastInsertRowid } = db.prepare(`
